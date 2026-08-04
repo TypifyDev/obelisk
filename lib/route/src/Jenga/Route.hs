@@ -61,6 +61,7 @@ module Jenga.Route
   , pathComponentEncoder
 
   , FullRoute (..)
+  , FullRouteEncoder
   , _FullRoute_Frontend
   , _FullRoute_Backend
   , mkFullRouteEncoder
@@ -975,6 +976,8 @@ handleEncoder recover e = Encoder $ do
 data FullRoute :: (Type -> Type) -> (Type -> Type) -> Type -> Type where
   FullRoute_Backend :: br a -> FullRoute br fr a
   FullRoute_Frontend :: JengaRoute fr a -> FullRoute br fr a
+
+type FullRouteEncoder br fr = Encoder Identity Identity (R (FullRoute br fr)) PageName
 
 -- | A type which can represent Jenga-specific resource routes, in addition to application specific routes which serve your
 -- frontend.
