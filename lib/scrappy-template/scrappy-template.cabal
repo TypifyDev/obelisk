@@ -1,4 +1,4 @@
-cabal-version:       2.4
+cabal-version:       3.4
 name:                scrappy-template
 -- PVP summary:      +-+------- breaking API changes
 --                   | | +----- non-breaking API additions
@@ -50,7 +50,15 @@ library
                , scrappy-core
                , text
   hs-source-dirs:      src
-  default-language:    Haskell2010
+  default-language: GHC2024
+  default-extensions:
+    FunctionalDependencies
+    OverloadedStrings
+    QuasiQuotes
+    RecordWildCards
+    RecursiveDo
+    TemplateHaskell
+    TypeFamilies
 
 test-suite scrappy-template-tests
   ghc-options:        -Wall -Werror -O0 -fno-full-laziness -fno-cse
@@ -59,7 +67,15 @@ test-suite scrappy-template-tests
   other-modules:      TemplateTest
                     , TemplatePropertyTest
   hs-source-dirs:     test
-  default-language:    Haskell2010
+  default-language: GHC2024
+  default-extensions:
+    FunctionalDependencies
+    OverloadedStrings
+    QuasiQuotes
+    RecordWildCards
+    RecursiveDo
+    TemplateHaskell
+    TypeFamilies
   build-depends:      base
                     , scrappy-template
                     , hspec

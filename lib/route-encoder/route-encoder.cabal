@@ -1,0 +1,42 @@
+cabal-version: 2.2
+name: route-encoder
+version: 0.1.0.0
+synopsis: Transport-agnostic Encoder machinery vendored from obelisk-route
+build-type: Simple
+
+common warnings
+  ghc-options: -Wall -Werror -fprint-potential-instances -Wredundant-constraints -Wincomplete-uni-patterns -Wincomplete-record-updates
+
+library
+  import: warnings
+  hs-source-dirs: src
+  default-language: GHC2024
+  default-extensions:
+    FunctionalDependencies
+    OverloadedStrings
+    QuasiQuotes
+    RecordWildCards
+    RecursiveDo
+    TemplateHaskell
+    TypeFamilies
+  build-depends: base,
+                 aeson,
+                 bytestring,
+                 categories,
+                 containers,
+                 dependent-map,
+                 dependent-sum,
+                 either,
+                 http-types,
+                 lens,
+                 mtl,
+                 semigroupoids,
+                 some,
+                 tabulation,
+                 text,
+                 transformers,
+                 universe
+
+  exposed-modules: Jenga.RouteEncoder
+
+  ghc-options: -O

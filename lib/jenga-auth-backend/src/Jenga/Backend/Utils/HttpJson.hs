@@ -17,11 +17,12 @@ import Rhyolite.Account
 import Database.Beam.Postgres
 import Database.Beam.Schema
 import Web.ClientSession as CS
-import Snap
-import Jenga.Snap.Extras (writeJSON)
+import Snap (MonadSnap, liftSnap)
+import Jenga.Snap.Extras ()
 
 import Control.Monad (void)
 import Control.Exception.Lifted (catch, SomeException(..))
+import Control.Monad.Catch (MonadCatch)
 import Data.Pool
 import Data.Aeson as Aeson
 import qualified Data.List.NonEmpty as NE
@@ -29,7 +30,7 @@ import qualified Data.Text as T
 import qualified Data.ByteString.Lazy as LBS
 
 import Effectful (Eff, (:>), IOE)
-import Effectful.Reader.Static (Reader)
+import Effectful.Reader.Static ()
 
 
 -- | Rewrite with getRequestBodyJSON
@@ -47,7 +48,7 @@ withRequestBodyJSON withF = do
     Right x -> withF x
 
 withPublicJSONRequestResponse
-  :: forall db be a b err es n
+  :: forall db cfg be a b err es n
   . ( Aeson.FromJSON a
     , Aeson.ToJSON b
     , Aeson.ToJSON err
@@ -68,7 +69,7 @@ withPublicJSONRequestResponse
   => (a -> Eff es (Either (BackendError err) b))
   -> LBS.ByteString
   -> Eff es ()
-withPublicJSONRequestResponse f raw = void $ withJSONRequestResponse @db f raw
+withPublicJSONRequestResponse f raw = void $ withJSONRequestResponse @db @cfg f raw
     -- \case
     -- Right _ -> pure ()
     -- Left err -> emailGalenWithEnv . LT.fromStrict $ err
@@ -81,7 +82,7 @@ withPublicJSONRequestResponse f raw = void $ withJSONRequestResponse @db f raw
   --   pure ()
 
 withConstrainedPrivateJSONRequestResponse
-  :: forall db be a b e es n
+  :: forall db cfg be a b e es n
   . ( FromJSON a
     , ToJSON b
     , ToJSON e
@@ -105,19 +106,19 @@ withConstrainedPrivateJSONRequestResponse
   -> (Id Account -> a -> Eff es (Either (BackendError e) b))
   -> Eff es ()
 withConstrainedPrivateJSONRequestResponse allowedUserTypes withF = do
-  csk <- asksM
-  dbConn <- asksM
+  csk <- asksM @CS.Key @cfg
+  dbConn <- asksM @(Pool Connection) @cfg
   (uTypeTbl :: PgTable Postgres db UserTypeTable) <- asksTableM
-  authCookieName <- asksM
+  authCookieName <- asksM @AuthCookieName @cfg
   constrainedPrivateRoute @db uTypeTbl authCookieName dbConn csk allowedUserTypes $ \acctId -> do
     raw <- getRequestBody
-    withJSONRequestResponse @db (withF acctId) raw
+    withJSONRequestResponse @db @cfg (withF acctId) raw
     -- when (isLeft x) $ liftIO $ do
     --   -- |^ FIX emailGalen emailConfig (LT.fromStrict . T.pack $ show acctId <> show x)
     --   print (LT.fromStrict . T.pack $ show acctId <> show x)
 
 withDependentPrivateJSONRequestResponse
-  :: forall db be a b e es n
+  :: forall db cfg be a b e es n
   . ( FromJSON a
     , ToJSON b
     , ToJSON e
@@ -140,18 +141,18 @@ withDependentPrivateJSONRequestResponse
   => (UserType -> Id Account -> a -> Eff es (Either (BackendError e) b))
   -> Eff es ()
 withDependentPrivateJSONRequestResponse withF = do
-  csk <- asksM -- Cfg _clientSessionKey
-  dbConn <- asksM -- Cfg _dbPool
+  csk <- asksM @CS.Key @cfg -- Cfg _clientSessionKey
+  dbConn <- asksM @(Pool Connection) @cfg -- Cfg _dbPool
   (uTypeTbl :: PgTable Postgres db UserTypeTable) <- asksTableM
-  authCookieName <- asksM
+  authCookieName <- asksM @AuthCookieName @cfg
   dependentPrivateRoute uTypeTbl authCookieName dbConn csk $ \userType acctId -> do
     raw <- getRequestBody
-    withJSONRequestResponse @db (withF userType acctId) raw
+    withJSONRequestResponse @db @cfg (withF userType acctId) raw
 
 -- | This function is meant to be completely independent of Authentication, so that it can be
 -- | wrapped by different auth schemes
 withJSONRequestResponse
-  :: forall db be a b err es n
+  :: forall db cfg be a b err es n
   . ( FromJSON a
     , ToJSON b
     , ToJSON err
@@ -172,11 +173,11 @@ withJSONRequestResponse withF raw = do
   x :: Either (BackendError e) b <- case Aeson.eitherDecode raw :: Either String a of
     Left e -> pure $ Left . BInvalidRequest $ T.pack e
     Right good -> catch (withF good) (\(SomeException e) -> pure $ Left . BException $ T.pack . show $ e)
-  reportWhenError @db x
+  reportWhenError @db @cfg x
   --pure x
 
 withPrivateRequestResponse
-  :: forall db es be a e n.
+  :: forall db cfg es be a e n.
      ( Show a
      , Show e
      , SpecificError (BackendError e)
@@ -192,10 +193,10 @@ withPrivateRequestResponse
   -> (Id Account -> LBS.ByteString -> Eff es (Either (BackendError e) a))
   -> LBS.ByteString
   -> Eff es (Either (BackendError e) a)
-withPrivateRequestResponse id_ withF raw = withPrivateErrorHandling @db id_ withF raw
+withPrivateRequestResponse id_ withF raw = withPrivateErrorHandling @db @cfg id_ withF raw
 
 withPrivateErrorHandling
-  :: forall db es be a e n.
+  :: forall db cfg es be a e n.
      ( Show a
      , Show e
      , SpecificError (BackendError e)
@@ -213,7 +214,7 @@ withPrivateErrorHandling
   -> Eff es (Either (BackendError e) a)
 withPrivateErrorHandling acctID withF raw = do
   x <- catch (withF acctID raw) (\(SomeException e) -> pure $ Left . BException $ T.pack . show $ e)
-  reportWhenError @db x
+  reportWhenError @db @cfg x
   -- when (isLeft x) $ liftIO $ do
   --   -- |^ FIX emailGalen emailConfig (LT.fromStrict . T.pack $ show x)
   --   print (LT.fromStrict . T.pack $ show x)
@@ -222,7 +223,7 @@ withPrivateErrorHandling acctID withF raw = do
 
 -- | NOTE: not yet in use, may not be ever needed but do keep as generic interface
 withPublicRequestResponse
-  :: forall db es be n e a.
+  :: forall db cfg es be n e a.
      ( Show a
      , Show e
      , SpecificError (BackendError e)
@@ -237,11 +238,11 @@ withPublicRequestResponse
   => (LBS.ByteString -> Eff es (Either (BackendError e) a))
   -> LBS.ByteString
   -> Eff es (Either (BackendError e) a)
-withPublicRequestResponse withF raw = withPublicErrorHandling @db withF raw
+withPublicRequestResponse withF raw = withPublicErrorHandling @db @cfg withF raw
 
 -- | NOTE: not yet in use, may not be ever needed but do keep as generic interface
 withPublicErrorHandling
-  :: forall db es be a e n.
+  :: forall db cfg es be a e n.
      ( Show a
      , Show e
      , SpecificError (BackendError e)
@@ -258,7 +259,7 @@ withPublicErrorHandling
   -> Eff es (Either (BackendError e) a)
 withPublicErrorHandling withF raw = do
   x <- catch (withF raw) (\(SomeException e) -> pure $ Left . BException $ T.pack . show $ e)
-  reportWhenError @db x
+  reportWhenError @db @cfg x
   -- when (isLeft x) $ liftIO $ do
   --   -- |^ FIX emailGalen emailConfig (LT.fromStrict . T.pack $ show x)
   --   logNoAuth (LT.fromStrict . T.pack $ show x)

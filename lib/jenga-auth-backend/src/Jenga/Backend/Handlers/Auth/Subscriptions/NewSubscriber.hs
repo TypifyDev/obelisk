@@ -32,14 +32,13 @@ import Control.Monad.IO.Class
 import Data.Pool
 import Data.Aeson (FromJSON)
 import Data.Time.Clock (nominalDay, addUTCTime, getCurrentTime)
-import qualified Data.Text as T
 
 import Effectful (Eff, (:>), IOE)
-import Effectful.Reader.Static (Reader)
+import Effectful.Reader.Static ()
 
 -- Change to Confirm Subscription
 newSubscriberHandler
-  :: forall api db be frontendRoute es n.
+  :: forall api db cfg be frontendRoute es n.
      ( IOE :> es
      , Database Postgres db
      , Reader cfg :> es, HasConfig cfg StripeConfig
@@ -63,14 +62,14 @@ newSubscriberHandler
   -> frontendRoute (Signed PasswordResetToken)
   -> Eff es (Either (BackendError SubscribeError) Bool)
 newSubscriberHandler proxy acctID form resetRoute = do
-  stripeConfig <- asksM --  _stripeConfig
+  stripeConfig <- asksM @StripeConfig @cfg --  _stripeConfig
   (acctTbl :: PgTable Postgres db Rhy.Account) <- asksTableM
   (uTypeTbl :: PgTable Postgres db UserTypeTable) <- asksTableM
   (freeTrialTbl :: PgTable Postgres db FreeTrial) <- asksTableM
   (stripeTbl :: PgTable Postgres db StripeRelation) <- asksTableM
   (orgTbl :: PgTable Postgres db OrganizationEmails) <- asksTableM
 
-  email'_code <- withDbEnv $ do
+  email'_code <- withDbEnv @cfg $ do
     e <- getUsersEmail acctTbl acctID
     dc <- getUsersDiscountCode freeTrialTbl acctID
     pure $ (,) <$> e <*> dc
@@ -97,10 +96,11 @@ newSubscriberHandler proxy acctID form resetRoute = do
                                                          -&- (tokenId token)
           case eithCustomer of
             Left stripeError -> pure . Left . BCritical . StripeGenError $ stripeError
-            Right customer -> do
-              liftIO $ print customer
+            Right DeletedCustomer{} -> pure . Left . BCritical $ StripeCustomerDeleted
+            Right Customer{customerId = cid} -> do
+              liftIO $ print cid
               --StripeCode validCode <- lookupSubscriptionCodeEnv discountCode
-              mValidCode <- lookupSubscriptionCodeEnv discountCode
+              mValidCode <- lookupSubscriptionCodeEnv @cfg discountCode
               case mValidCode of
                 Nothing -> pure . Left . BUserError $ NoMatchingPlanFound
                 Just (StripePlan validCode)  -> do
@@ -111,15 +111,15 @@ newSubscriberHandler proxy acctID form resetRoute = do
                       liftIO $ print plan
                       sevenDaysFromNow <- liftIO $ ((nominalDay * 7) `addUTCTime`) <$> getCurrentTime
                       let trialEnd = TrialEnd sevenDaysFromNow
-                      (isNew, aid) <- withDbEnv $ ensureAccountExists' acctTbl email
+                      (isNew, aid) <- withDbEnv @cfg $ ensureAccountExists' acctTbl email
                       -- let (AccountId (SqlSerial rawID)) = aid
                       --reportLog False $ NewSubscription (fromIntegral rawID) email
                       case isNew of
                         False -> do
-                          mInfo <- withDbEnv $ getStripeInfo stripeTbl aid
+                          mInfo <- withDbEnv @cfg $ getStripeInfo stripeTbl aid
                           case mInfo of
                             Nothing -> do
-                              withDbEnv $ isOrgEmail orgTbl email >>= \case
+                              withDbEnv @cfg $ isOrgEmail orgTbl email >>= \case
                                 False -> pure $ Left . BCritical $ NoAssociatedStripeInfo
                                 True -> pure $ Left . BUserError $ AlreadyInGroupSubscription
                             Just (StripeRelation _ _ subId) ->
@@ -127,37 +127,37 @@ newSubscriberHandler proxy acctID form resetRoute = do
                                 Just _ -> pure $ Left . BUserError $ AlreadyInSelfSubscription
                                 Nothing -> do
                                   -- Remove trial end, we handle this ourselves
-                                  eithSubscription <- stripe' $ createSubscription (customerId customer) (planId plan) -&- trialEnd
+                                  eithSubscription <- stripe' $ createSubscription cid (planId plan) -&- trialEnd
                                   case eithSubscription of
                                     Left subscriptionError -> do
                                       pure . Left . BCritical . StripeGenError $ subscriptionError
                                     Right sub -> do
-                                      withDbEnv $ do
-                                        recordResubscribe stripeTbl aid (customerId customer) (subscriptionId sub)
+                                      withDbEnv @cfg $ do
+                                        recordResubscribe stripeTbl aid cid (subscriptionId sub)
                                       pure $ Right False
                         True -> do
-                          mNonce <- withDbEnv $ do
+                          mNonce <- withDbEnv @cfg $ do
                             putNewUserType uTypeTbl aid Nothing
                             newNonce acctTbl aid
                           case mNonce of
                             Nothing -> pure $ Left . BCritical $ Stripe_FailedMkNonce
                             Just noncense -> do
-                              csk <- asksM -- Cfg _clientSessionKey
-                              authToken <- withDbEnv $ passwordResetToken csk aid noncense
-                              eithSubscription <- stripe' $ createSubscription (customerId customer) (planId plan) -&- trialEnd
+                              csk <- asksM @CS.Key @cfg -- Cfg _clientSessionKey
+                              authToken <- withDbEnv @cfg $ passwordResetToken csk aid noncense
+                              eithSubscription <- stripe' $ createSubscription cid (planId plan) -&- trialEnd
                               case eithSubscription of
                                 Left subscriptionError -> do
-                                  withDbEnv $ deleteFailedAccount acctTbl email
+                                  withDbEnv @cfg $ deleteFailedAccount acctTbl email
                                   pure . Left . BCritical . StripeGenError $ subscriptionError
                                 Right sub -> do
-                                  withDbEnv $ putNewStripeInfo stripeTbl aid (customerId customer) (subscriptionId sub)
-                                  link <- renderFullRouteFE proxy $ resetRoute :/ authToken
+                                  withDbEnv @cfg $ putNewStripeInfo stripeTbl aid cid (subscriptionId sub)
+                                  link <- renderFullRouteFE @api @(R frontendRoute) @cfg @es proxy $ resetRoute :/ authToken
                                   let
                                     to = Address
                                       { addressName = Nothing
                                       , addressEmail = email
                                       }
-                                  sendEmail <- newEmailHtml @db [to] "Subscription Confirmation" $ do
+                                  sendEmail <- newEmailHtml @db @cfg [to] "Subscription Confirmation" $ do
                                     Rfx.el "div" $ do
                                       Rfx.el "div" $ Rfx.text "New account creation requested"
                                       Rfx.el "div" $ Rfx.text "go the following address to set your password:"

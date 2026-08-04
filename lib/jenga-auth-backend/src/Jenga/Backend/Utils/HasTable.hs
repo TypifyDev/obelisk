@@ -7,7 +7,7 @@ import Database.Beam.Schema
 import Data.Pool
 
 import Effectful (Eff, (:>), IOE)
-import Effectful.Reader.Static (Reader)
+import Effectful.Reader.Static ()
 
 
 class HasJengaTable dbHost db tbl where
@@ -21,10 +21,10 @@ asksTableM
 asksTableM = do
   pure tableRef
 
-withDbEnv :: (Reader cfg :> es, HasConfig cfg (Pool Connection), IOE :> es) => Pg a -> Eff es a
-withDbEnv query_ = flip runSerializable query_ =<< asksM
+withDbEnv :: forall cfg es a. (Reader cfg :> es, HasConfig cfg (Pool Connection), IOE :> es) => Pg a -> Eff es a
+withDbEnv query_ = flip runSerializable query_ =<< asksM @(Pool Connection) @cfg
 
-withDbEnvQuiet  :: (Reader cfg :> es, HasConfig cfg (Pool Connection), IOE :> es) => Pg a -> Eff es a
+withDbEnvQuiet :: forall cfg es a. (Reader cfg :> es, HasConfig cfg (Pool Connection), IOE :> es) => Pg a -> Eff es a
 withDbEnvQuiet query = do
-  dbConn <- asksM
+  dbConn <- asksM @(Pool Connection) @cfg
   runDbQuiet dbConn query

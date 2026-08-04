@@ -16,6 +16,8 @@ module Jenga.Common.Schema where
 
 
 import Jenga.Common.Auth
+import Jenga.Common.Company (CompanyInfo)
+import Rhyolite.Account (Account)
 import Control.Lens.TH
 import Data.Aeson
 import Data.Functor.Identity
@@ -427,6 +429,39 @@ instance FromJSON GitHubUser where
 
 data Authd = GithubAuthd GithubIDRequest --  | other auths eg. BasicAuth
 data GithubIDRequest = GithubIDRequest T.Text
+
+
+-- | Maps an Account to the CompanyInfo they belong to (org-based signup /
+-- invite flow). The account must exist before this row is created.
+data OrgOwnedUsers f = OrgOwnedUsers
+  { _orgOwnedUsers_accountId :: PrimaryKey Account f
+  , _orgOwnedUsers_companyId :: PrimaryKey CompanyInfo f
+  } deriving Generic
+
+instance Beamable OrgOwnedUsers
+instance Beamable (PrimaryKey OrgOwnedUsers)
+
+type HasOrgOwnedUsersConstraint (c :: Type -> Constraint) f =
+  ( c (Columnar f (SqlSerial Int64))
+  , c (PrimaryKey Account f)
+  , c (PrimaryKey CompanyInfo f)
+  )
+
+instance Table OrgOwnedUsers where
+  data PrimaryKey OrgOwnedUsers f = OrgOwnedUserId
+    { _orgOwnedUserId :: PrimaryKey Account f
+    } deriving Generic
+  primaryKey = OrgOwnedUserId <$> _orgOwnedUsers_accountId
+
+deriving instance HasOrgOwnedUsersConstraint Eq f => Eq (OrgOwnedUsers f)
+deriving instance HasOrgOwnedUsersConstraint Show f => Show (OrgOwnedUsers f)
+
+deriving instance Eq (PrimaryKey OrgOwnedUsers Identity)
+deriving instance Show (PrimaryKey OrgOwnedUsers Identity)
+instance ToJSON (PrimaryKey OrgOwnedUsers Identity)
+instance FromJSON (PrimaryKey OrgOwnedUsers Identity)
+instance ToJSON (OrgOwnedUsers Identity)
+instance FromJSON (OrgOwnedUsers Identity)
 
 
 makeLenses ''SendEmailTask

@@ -34,14 +34,30 @@ library
         ghc-typelits-natnormalise >= 0.7
       , ghc-typelits-knownnat     >= 0.7
   hs-source-dirs:   src
-  default-language: Haskell2010
+  default-language: GHC2024
+  default-extensions:
+    FunctionalDependencies
+    OverloadedStrings
+    QuasiQuotes
+    RecordWildCards
+    RecursiveDo
+    TemplateHaskell
+    TypeFamilies
   ghc-options:      -Wall
 
 test-suite monad-tree-test
   type:             exitcode-stdio-1.0
   main-is:          Main.hs
   hs-source-dirs:   test
-  default-language: Haskell2010
+  default-language: GHC2024
+  default-extensions:
+    FunctionalDependencies
+    OverloadedStrings
+    QuasiQuotes
+    RecordWildCards
+    RecursiveDo
+    TemplateHaskell
+    TypeFamilies
   ghc-options:      -Wall
   build-depends:
       base         >= 4.14 && < 5
@@ -52,7 +68,15 @@ test-suite indexed-test
   type:             exitcode-stdio-1.0
   main-is:          IndexedTest.hs
   hs-source-dirs:   test
-  default-language: Haskell2010
+  default-language: GHC2024
+  default-extensions:
+    FunctionalDependencies
+    OverloadedStrings
+    QuasiQuotes
+    RecordWildCards
+    RecursiveDo
+    TemplateHaskell
+    TypeFamilies
   ghc-options:      -Wall
   build-depends:
       base                      >= 4.14 && < 5

@@ -12,21 +12,22 @@ import Jenga.Common.Auth
 import Jenga.Common.Errors
 import Jenga.Route (HasRoute)
 import Jenga.Route.Frontend (SetRoute, setRoute)
-import Reflex (Reflex, Event, Dynamic, current, tag, leftmost, ffor, (<$))
+import Reflex (Reflex, Event, Dynamic, current, tag, leftmost)
 
 import Data.Proxy (Proxy)
 import qualified Data.Map as M
 import qualified Data.Text as T
 
 import Effectful (Eff, (:>))
-import Effectful.Reader.Static (Reader)
+import Effectful.Reader.Static ()
+import Reflex.Effectful.Types (KnownTimeline)
 import Reflex.Effectful.Effect.Hold (Hold, holdDyn)
 import Reflex.Effectful.Effect.Dom (Dom)
 import Reflex.Effectful.Effect.PostBuild (PostBuild)
 import Reflex.Effectful.Effect.TriggerEvent (TriggerEvent)
 import Reflex.Effectful.Effect.PerformEvent (PerformEvent)
 import Reflex.Effectful.Effect.Prerender (Prerender)
-import Reflex.Effectful.Effect.Jenga.Configs (Configs)
+import Jenga.Frontend.Effectful.Configs (Configs)
 
 data LoginConfig t = LoginConfig
   { _loginConfig_errors :: Dynamic t (Maybe T.Text)
@@ -43,7 +44,7 @@ data LoginData t m = LoginData
   }
 
 login_FRP
-  :: forall api backendR frontendR t es.
+  :: forall api backendR cfg frontendR t es.
      ( Hold t :> es
      , Dom t :> es
      , PostBuild t :> es
@@ -55,6 +56,7 @@ login_FRP
      , HasRoute api backendR
      , Reader cfg :> es, HasConfig cfg BaseURL
      , Reflex t
+     , KnownTimeline es t
      )
   => Proxy api
   -> backendR
@@ -63,8 +65,10 @@ login_FRP
   -> LoginData t (Eff es)
   -> Eff es (LoginConfig t)
 login_FRP proxy loginRoute requestNewPasswordPageRoute signupRoute (LoginData user pass submit forgotPass goSignup) = do
-  let credentials = tag (current $ (,) <$> value user <*> value pass) submit
-  (err, token) <- runAPIWithHeaders proxy loginRoute (M.fromList [(clientTypeHeader, T.pack . show $ clientType)]) credentials
+  let credentials :: Event t (T.Text, T.Text)
+      credentials = tag (current $ (,) <$> value user <*> value pass) submit
+  (err :: Event t (RequestError LoginError), token :: Event t (AuthToken, UserType)) <-
+    runAPIWithHeaders @api @backendR @t @es @cfg proxy loginRoute (M.fromList [(clientTypeHeader, T.pack . show $ clientType)]) credentials
   shouldSubmit <- holdDyn True $ leftmost [False <$ credentials, True <$ token, True <$ err]
   errors <- holdDyn Nothing $ Just . showUser <$> err
   setRoute $ requestNewPasswordPageRoute <$ forgotPass

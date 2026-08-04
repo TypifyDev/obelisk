@@ -243,6 +243,7 @@ data SubscribeError
   | Stripe_FailedMkNonce
   | SubFailedEmail T.Text
   | NoMatchingPlanFound
+  | StripeCustomerDeleted
   deriving (Show,Generic)
 instance ToJSON StripeError
 deriving instance Generic StripeError
@@ -263,6 +264,7 @@ instance ShowUser SubscribeError where
   showUser Stripe_FailedMkNonce = "Nonce Error: Failed to make nonce"
   showUser (SubFailedEmail _) = "Unable to send email, we will manually send"
   showUser NoMatchingPlanFound = "Unable to find valid plan for this code. No free version exists"
+  showUser StripeCustomerDeleted = "Stripe returned a deleted-customer record where an active one was expected"
 
 data NoFreeTrialCode = NoFreeTrialCode deriving (Eq,Show,Generic)
 instance FromJSON NoFreeTrialCode

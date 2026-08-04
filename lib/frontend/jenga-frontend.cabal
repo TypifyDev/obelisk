@@ -1,15 +1,25 @@
+cabal-version: 3.4
 name: jenga-frontend
 version: 0.1
-cabal-version: >= 1.2
 build-type: Simple
 
 library
+  default-language: GHC2024
+  default-extensions:
+    FunctionalDependencies
+    OverloadedStrings
+    QuasiQuotes
+    RecordWildCards
+    RecursiveDo
+    TemplateHaskell
+    TypeFamilies
   hs-source-dirs: src
   build-depends: base,
                  bytestring,
                  containers,
                  cookie,
                  dependent-sum,
+                 effectful-core,
                  ghcjs-dom,
                  jsaddle,
                  lens,
@@ -21,9 +31,14 @@ library
                  ref-tf,
                  reflex,
                  reflex-dom-core,
+                 reflex-effectful,
                  text,
                  transformers
   exposed-modules:
     Jenga.Frontend
     Jenga.Frontend.Cookie
+    Jenga.Frontend.Effectful
+    Jenga.Frontend.Effectful.Configs
+    Jenga.Frontend.Effectful.Cookies
+    Jenga.Frontend.Effectful.Route
   ghc-options: -Wall -Werror -Wredundant-constraints -Wincomplete-uni-patterns -Wincomplete-record-updates -O

@@ -113,35 +113,14 @@ library
   ghc-options: -Wall -Werror -O -threaded -fno-show-valid-hole-fits
                -- -Wunused-packages
                -- -Wredundant-constraints -Wincomplete-uni-patterns -Wincomplete-record-updates -O -fno-show-valid-hole-fits -Werror=incomplete-patterns
+  default-language: GHC2024
   default-extensions:
-      AllowAmbiguousTypes
-      BangPatterns
-      ConstraintKinds
-      DataKinds
-      DefaultSignatures
-      DeriveDataTypeable
-      DeriveFoldable
-      DeriveFunctor
-      DeriveGeneric
-      DeriveTraversable
-      EmptyCase
-      FlexibleContexts
-      FlexibleInstances
       FunctionalDependencies
-      GADTs
-      GeneralizedNewtypeDeriving
-      InstanceSigs
-      KindSignatures
-      LambdaCase
-      MultiParamTypeClasses
       OverloadedStrings
-      PolyKinds
       QuasiQuotes
-      RankNTypes
+      RecordWildCards
       RecursiveDo
-      ScopedTypeVariables
-      StandaloneDeriving
       TemplateHaskell
-      TypeApplications
       TypeFamilies
-      TypeOperators
+      AllowAmbiguousTypes
+      DefaultSignatures

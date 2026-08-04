@@ -6,11 +6,12 @@ import Templates.Types
 import Jenga.Common.Errors
 import Jenga.Common.Auth
 import Jenga.Route.Frontend (Routed, askRoute)
-import Reflex (Reflex, Event, Dynamic, current, tag, attach, leftmost, ffor, fanEither, (<$))
+import Reflex (Reflex, Event, Dynamic, current, tag, attach, leftmost, ffor, fanEither)
 
 import qualified Data.Text as T
 
 import Effectful (Eff, (:>))
+import Reflex.Effectful.Types (KnownTimeline)
 import Reflex.Effectful.Effect.Hold (Hold, holdDyn)
 import Reflex.Effectful.Effect.Dom (Dom)
 import Reflex.Effectful.Effect.PostBuild (PostBuild)
@@ -33,6 +34,7 @@ redeemLink_FRP
      , Hold t :> es
      , Routed t T.Text :> es
      , Reflex t
+     , KnownTimeline es t
      )
   => ((T.Text, Email) -> req)
   -> (Event t req -> Eff es (Event t rsp))
@@ -52,7 +54,7 @@ redeemLink_FRP mkAPI sendRequest (RedeemLinkData email' eConfirm' submit) = do
   codeLink <- askRoute
   let req = ffor (attach (current codeLink) $ Email <$> good) mkAPI
   response <- sendRequest req
-  let (err, res) = fanEither (castResponse response)
+  let (err, res) = fanEither (castResponse response) :: (Event t RedeemLinkError, Event t T.Text)
 
   let errorsEv = Just <$> leftmost [ showUser <$> err
                                    , bad

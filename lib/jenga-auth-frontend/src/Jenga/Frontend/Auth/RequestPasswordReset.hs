@@ -6,11 +6,12 @@ import Templates.Types
 import Jenga.Common.Errors
 import Jenga.Common.Auth
 
-import Reflex (Reflex, Event, Dynamic, current, tag, leftmost, ffor, fanEither, (<$))
+import Reflex (Reflex, Event, Dynamic, current, tag, leftmost, ffor, fanEither)
 
 import qualified Data.Text as T
 
 import Effectful (Eff, (:>))
+import Reflex.Effectful.Types (KnownTimeline)
 import Reflex.Effectful.Effect.Hold (Hold, holdDyn)
 import Reflex.Effectful.Effect.Dom (Dom)
 import Reflex.Effectful.Effect.PostBuild (PostBuild)
@@ -31,6 +32,7 @@ requestPasswordReset_FRP
      , PostBuild t :> es
      , Hold t :> es
      , Reflex t
+     , KnownTimeline es t
      )
   => (Email -> req)
   -> (Event t req -> Eff es (Event t rsp))
@@ -48,7 +50,7 @@ requestPasswordReset_FRP mkAPI sendRequest (EmailForPasswordResetData email' eCo
     emails_agree = fmap f $ (,) <$> email <*> eConfirm
   let (bad, good) = fanEither (tag (current emails_agree) submit)
   res <- sendRequest $ ffor good $ \goodEmail -> mkAPI $ Email goodEmail
-  let (apiError, goodResponse) = fanEither (castResponse res)
+  let (apiError, goodResponse) = fanEither (castResponse res) :: (Event t RequestPasswordResetError, Event t T.Text)
   let errorsEv = Just <$> leftmost
         [ bad
         , showUser <$> apiError

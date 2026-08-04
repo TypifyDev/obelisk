@@ -1,4 +1,4 @@
-cabal-version:       3.0
+cabal-version:       3.4
 name:                scrappy-core
 -- PVP summary:      +-+------- breaking API changes
 --                   | | +----- non-breaking API additions
@@ -75,14 +75,30 @@ library
                , transformers >= 0.6.1 && < 0.7
 
   hs-source-dirs:      src
-  default-language:    Haskell2010
+  default-language: GHC2024
+  default-extensions:
+    FunctionalDependencies
+    OverloadedStrings
+    QuasiQuotes
+    RecordWildCards
+    RecursiveDo
+    TemplateHaskell
+    TypeFamilies
 
 test-suite tests
   import:             warnings
   type:               exitcode-stdio-1.0
   main-is:            Main.hs
   hs-source-dirs:     test
-  default-language:    Haskell2010
+  default-language: GHC2024
+  default-extensions:
+    FunctionalDependencies
+    OverloadedStrings
+    QuasiQuotes
+    RecordWildCards
+    RecursiveDo
+    TemplateHaskell
+    TypeFamilies
   build-depends: base >= 4.20.2 && < 4.21
                , scrappy-core
                , aeson

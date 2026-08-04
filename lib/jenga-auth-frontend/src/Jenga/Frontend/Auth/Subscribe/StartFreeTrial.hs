@@ -6,7 +6,7 @@ import Jenga.Common.Auth
 import Jenga.Common.Errors
 
 import Jenga.Route.Frontend (Routed, askRoute)
-import Reflex (Reflex, Event, Dynamic, current, tag, attach, leftmost, ffor, fanEither, (<$))
+import Reflex (Reflex, Event, Dynamic, current, tag, attach, leftmost, ffor, fanEither)
 
 import qualified Text.Email.Validate as EmailValidate
 import Control.Monad (join)
@@ -15,9 +15,10 @@ import qualified Data.Text as T
 import qualified Data.Text.Encoding as T
 import Data.Either (isRight)
 
-import Templates.Types
+import Templates.Types ()
 
 import Effectful (Eff, (:>))
+import Reflex.Effectful.Types (KnownTimeline)
 import Reflex.Effectful.Effect.Hold (Hold, holdDyn)
 import Reflex.Effectful.Effect.Dom (Dom)
 import Reflex.Effectful.Effect.PostBuild (PostBuild)
@@ -44,6 +45,7 @@ startFreeTrial_FRP
      , PostBuild t :> es
      , Prerender t :> es
      , Reflex t
+     , KnownTimeline es t
      )
   => ((Maybe T.Text, Email) -> req)
   -> (Event t req -> Eff es (Event t rsp))
@@ -64,7 +66,7 @@ startFreeTrial_FRP mkAPI_NewFreeTrial sendRequest (StartFreeTrialData email conf
   let req = ffor (attach (current code) emailsGood) mkAPI_NewFreeTrial
 
   response <- sendRequest req
-  let (errRes, good) = fanEither (castResponse response)
+  let (errRes, good) = fanEither (castResponse response) :: (Event t FreeTrialError, Event t ())
   errors <- holdDyn "" $ leftmost
     [ showUser <$> errRes
     , emailErr

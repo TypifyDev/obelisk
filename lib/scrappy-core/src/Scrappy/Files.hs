@@ -110,5 +110,5 @@ areFilesUsed sourceDir usageDir = do
   maps <- mapM (\x -> searchManyFile sources' x) searchFiles
   let mapped = mconcat maps
   print mapped
-  print "---"
+  print ("---" :: String)
   print $ filter (\s -> not $ elem s (Map.keys mapped)) sources'

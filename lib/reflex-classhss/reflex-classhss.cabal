@@ -47,7 +47,15 @@ library
                       -->= 1.2.5 && < 1.3
     hs-source-dirs:   src
     ghc-options: -Wall -Werror -O -threaded -fno-show-valid-hole-fits
-    default-language: Haskell2010
+    default-language: GHC2024
+    default-extensions:
+      FunctionalDependencies
+      OverloadedStrings
+      QuasiQuotes
+      RecordWildCards
+      RecursiveDo
+      TemplateHaskell
+      TypeFamilies
 
 test-suite setsides-test
     import:           warnings
@@ -59,7 +67,15 @@ test-suite setsides-test
                     , reflex-dom-core
                     , ClasshSS
                     , text
-    default-language: Haskell2010
+    default-language: GHC2024
+    default-extensions:
+      FunctionalDependencies
+      OverloadedStrings
+      QuasiQuotes
+      RecordWildCards
+      RecursiveDo
+      TemplateHaskell
+      TypeFamilies
 
 test-suite example-dom
     import:           warnings
@@ -75,7 +91,15 @@ test-suite example-dom
                     , text
                     , ghc-typelits-natnormalise >= 0.7
                     , ghc-typelits-knownnat     >= 0.7
-    default-language: Haskell2010
+    default-language: GHC2024
+    default-extensions:
+      FunctionalDependencies
+      OverloadedStrings
+      QuasiQuotes
+      RecordWildCards
+      RecursiveDo
+      TemplateHaskell
+      TypeFamilies
 
 test-suite inline-block-test
     import:           warnings
@@ -91,4 +115,12 @@ test-suite inline-block-test
                     , text
                     , ghc-typelits-natnormalise >= 0.7
                     , ghc-typelits-knownnat     >= 0.7
-    default-language: Haskell2010
+    default-language: GHC2024
+    default-extensions:
+      FunctionalDependencies
+      OverloadedStrings
+      QuasiQuotes
+      RecordWildCards
+      RecursiveDo
+      TemplateHaskell
+      TypeFamilies

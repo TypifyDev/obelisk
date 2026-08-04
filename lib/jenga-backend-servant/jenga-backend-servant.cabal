@@ -24,22 +24,16 @@ library
     , text
 
   hs-source-dirs:   src
-  default-language:  Haskell2010
+  default-language: GHC2024
 
   if arch(javascript) || arch(wasm32)
     buildable: False
 
   default-extensions:
-    ConstraintKinds
-    DataKinds
-    FlexibleContexts
-    FlexibleInstances
-    GADTs
-    KindSignatures
-    MultiParamTypeClasses
+    FunctionalDependencies
     OverloadedStrings
-    RankNTypes
-    ScopedTypeVariables
-    TypeApplications
+    QuasiQuotes
+    RecordWildCards
+    RecursiveDo
+    TemplateHaskell
     TypeFamilies
-    TypeOperators

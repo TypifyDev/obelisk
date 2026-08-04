@@ -1,9 +1,9 @@
+cabal-version: 2.0
 name: jenga-snap-extras
 version: 0.1
 synopsis: Extra functionality for Snap that should be considered for upstreaming
-license: BSD3
+license: BSD-3-Clause
 build-type: Simple
-cabal-version: >=1.2
 
 library
   hs-source-dirs: src
@@ -23,6 +23,16 @@ library
       Jenga.Snap.Extras
 
   ghc-options: -Wall -Werror -Wredundant-constraints -Wincomplete-uni-patterns -Wincomplete-record-updates -O
+
+  default-language: GHC2024
+  default-extensions:
+    FunctionalDependencies
+    OverloadedStrings
+    QuasiQuotes
+    RecordWildCards
+    RecursiveDo
+    TemplateHaskell
+    TypeFamilies
 
   if arch(javascript) || arch(wasm32)
     buildable: False

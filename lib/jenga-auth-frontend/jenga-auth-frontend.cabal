@@ -58,12 +58,14 @@ library
                , templates
                , text
                , time
+               , servant-jsaddle
                , vessel
                , ref-tf
                , reflex-dom-core
                , data-default
   exposed-modules:
     Jenga.Frontend.Api
+    Jenga.Frontend.Api.Client
     Jenga.Frontend.Consumable
     Jenga.Frontend.DomExtras
     Jenga.Frontend.FRPExtras
@@ -90,16 +92,12 @@ library
                -O -fno-show-valid-hole-fits "-with-rtsopts= -K0"
                -- -Wredundant-constraints -Wincomplete-uni-patterns -Wincomplete-record-updates -O -fno-show-valid-hole-fits -Werror=incomplete-patterns
 
+  default-language: GHC2024
   default-extensions:
-    ConstraintKinds
-    FlexibleContexts
-    FlexibleInstances
     FunctionalDependencies
-    GADTs
-    LambdaCase
-    MultiParamTypeClasses
-    -- OverloadedStrings
-    RankNTypes
+    OverloadedStrings
+    QuasiQuotes
+    RecordWildCards
     RecursiveDo
-    ScopedTypeVariables
     TemplateHaskell
+    TypeFamilies

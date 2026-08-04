@@ -25,11 +25,11 @@ import Data.Maybe (isJust)
 import qualified Data.Text as T
 
 import Effectful (Eff, (:>), IOE)
-import Effectful.Reader.Static (Reader)
+import Effectful.Reader.Static ()
 
 
 resetPasswordHandler
-  :: forall db es x n.
+  :: forall db cfg es x n.
      ( IOE :> es
      , Database Postgres db
      , Reader cfg :> es, HasConfig cfg AdminEmail
@@ -47,8 +47,8 @@ resetPasswordHandler (signedToken, newPass) chooseWelcomeLetter = do
   (acctsTbl :: PgTable Postgres db Account) <- asksTableM
   (uTypeTbl :: PgTable Postgres db UserTypeTable) <- asksTableM
 
-  dbConnection <- asksM -- Cfg _dbPool
-  csk <- asksM -- Cfg _clientSessionKey
+  dbConnection <- asksM @(Pool Connection) @cfg -- Cfg _dbPool
+  csk <- asksM @CS.Key @cfg -- Cfg _clientSessionKey
   case readSignedWithKey csk signedToken of
     Nothing -> pure . Left . BUserError $ InvalidToken -- "Invalid token"
     Just (PasswordResetToken (accountID, nonce)) -> do
@@ -77,7 +77,7 @@ resetPasswordHandler (signedToken, newPass) chooseWelcomeLetter = do
                     }
                   passwordState = toPasswordState . isJust . _account_password $ acct'
                   --(Subject subject, email) = chooseWelcomeLetter uType . toPasswordState . isJust . _account_password $ acct'
-                newMkEmailHtml @db [to] (chooseWelcomeLetter uType passwordState) >>= \case
+                newMkEmailHtml @db @cfg [to] (chooseWelcomeLetter uType passwordState) >>= \case
                   Left _ -> pure . Left . BCritical $ Reset_NoEmailSent
                   Right () -> do
                     signed <- liftIO $ signWithKey csk ( aid )

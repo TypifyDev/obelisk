@@ -1,6 +1,6 @@
 name: jenga-executable-config-lookup
 version: 0.1.1
-cabal-version: >= 1.2
+cabal-version: 2.0
 build-type: Simple
 
 library
@@ -35,3 +35,13 @@ library
     transformers
 
   ghc-options: -Wall
+
+  default-language: GHC2024
+  default-extensions:
+    FunctionalDependencies
+    OverloadedStrings
+    QuasiQuotes
+    RecordWildCards
+    RecursiveDo
+    TemplateHaskell
+    TypeFamilies

@@ -39,7 +39,7 @@ import qualified Data.ByteString.Base64 as B64
 import qualified Data.ByteString as BS
 
 import Effectful (Eff, (:>), IOE)
-import Effectful.Reader.Static (Reader)
+import Effectful.Reader.Static ()
 
 
 -- | This is currently a toss up as we switch from an old semi-broken system
@@ -225,7 +225,7 @@ privateRouteJSONOut (AuthCookieName authCookieName) key fma = do
           a <- fma acctId
           liftSnap $ writeJSON'' a
 
-type HasAdminReporting es db n =
+type HasAdminReporting cfg es db n =
   ( HasJengaTable Postgres db LogItemRow
   , HasJengaTable Postgres db SendEmailTask
   , Reader cfg :> es, HasConfig cfg (Pool Connection)
@@ -234,20 +234,20 @@ type HasAdminReporting es db n =
   )
 
 wsRequestAuth
-  :: forall db es be n e a.
+  :: forall db cfg es be n e a.
      ( IOE :> es
      , MonadCatch (Eff es)
      , Show e
      , SpecificError (BackendError e)
      , Reader cfg :> es, HasConfig cfg CS.Key
-     , HasAdminReporting es db n
+     , HasAdminReporting cfg es db n
      , HasJsonNotifyTbl be SendEmailTask n
      )
   => Signed (Id Account)
   -> (Id Account -> Eff es (Either (BackendError e) a))
   -> Eff es (Either (BackendError e) a)
 wsRequestAuth authToken k = do
-  csk <- asksM
+  csk <- asksM @CS.Key @cfg
   case readSignedWithKey csk authToken of
-    Just user -> withErrorReporting @db $ k user
+    Just user -> withErrorReporting @db @cfg $ k user
     Nothing -> pure . Left $ NoAuth

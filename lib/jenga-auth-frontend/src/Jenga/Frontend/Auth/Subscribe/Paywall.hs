@@ -6,14 +6,15 @@ import Jenga.Common.Auth
 import Jenga.Common.Errors
 import Jenga.Common.Stripe
 import Jenga.Route.Frontend (SetRoute, setRoute)
-import Reflex (Reflex, Event, Dynamic, current, tag, leftmost, ffor, fanEither, ffilter, (<$))
+import Reflex (Reflex, Event, Dynamic, current, tag, leftmost, ffor, fanEither, ffilter)
 
 import qualified Data.Text as T
 import Text.Read
 
 import Effectful (Eff, (:>))
+import Reflex.Effectful.Types (KnownTimeline)
 import Reflex.Effectful.Effect.Hold (Hold, holdDyn)
-import Reflex.Effectful.Effect.Dom (Dom)
+import Reflex.Effectful.Effect.Dom ()
 import Reflex.Effectful.Effect.PostBuild (PostBuild, getPostBuild)
 import Reflex.Effectful.Effect.PerformEvent (PerformEvent)
 import Reflex.Effectful.Effect.TriggerEvent (TriggerEvent, delay)
@@ -44,6 +45,7 @@ paywall_FRP
      , TriggerEvent t :> es
      , SetRoute t frontendR :> es
      , Reflex t
+     , KnownTimeline es t
      )
   => frontendR
   -> (Event t () -> Eff es (Event t (Either (BackendError NoFreeTrialCode) (T.Text, Maybe T.Text))))

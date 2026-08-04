@@ -13,7 +13,15 @@ executable jenga
   build-depends:
     , base
     , jenga-command
-  default-language: GHC2021
+  default-language: GHC2024
+  default-extensions:
+    FunctionalDependencies
+    OverloadedStrings
+    QuasiQuotes
+    RecordWildCards
+    RecursiveDo
+    TemplateHaskell
+    TypeFamilies
   ghc-options: -Wall -threaded
 
 library
@@ -42,8 +50,13 @@ library
     , which
     , unix
     , bytestring
-  default-language: GHC2021
+  default-language: GHC2024
   default-extensions:
+    FunctionalDependencies
     OverloadedStrings
+    QuasiQuotes
+    RecordWildCards
+    RecursiveDo
     TemplateHaskell
+    TypeFamilies
   ghc-options: -Wall

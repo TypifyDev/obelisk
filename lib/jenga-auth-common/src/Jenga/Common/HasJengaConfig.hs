@@ -27,8 +27,7 @@ module Jenga.Common.HasJengaConfig
     -- * Route rendering
   , renderFullRouteBE
   , renderFullRouteFE
-  , Link
-  , getLink
+  , Link(..)
 
     -- * Env checks
   , isLocalHostEnv
@@ -38,6 +37,7 @@ module Jenga.Common.HasJengaConfig
     -- * Legacy compatibility
   , HasConfig(..)
   , asksM
+  , MkRoute
 
     -- * Re-exports
   , Reader
@@ -59,6 +59,13 @@ import Effectful.Reader.Static (Reader, ask)
 
 import Jenga.Route (HasRoute(..), renderRoute)
 import Data.Proxy (Proxy)
+
+-- | Constraint synonym for handlers/renderers that need base URL access
+-- when constructing links back to the application. The @br@ / @fr@ type
+-- parameters are phantom in the servant-based routing world (jenga-route
+-- doesn't expose an Encoder type here) but are retained for signature
+-- compatibility with pre-servant consumers.
+type MkRoute cfg br fr = HasConfig cfg BaseURL
 
 -- ─── Effectful config access ─────────────────────────────────
 

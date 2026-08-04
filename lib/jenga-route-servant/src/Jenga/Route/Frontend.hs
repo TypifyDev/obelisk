@@ -23,6 +23,7 @@ module Jenga.Route.Frontend
 
     -- * Interpreter
   , runBrowserRouting
+  , runBrowserRoutingWith
   ) where
 
 import           Data.IORef
@@ -36,7 +37,8 @@ import           Effectful (Effect, Dispatch(..), DispatchOf, (:>), Eff, IOE)
 import qualified Effectful
 import           Effectful.Dispatch.Dynamic (send, interpret_)
 import           Effectful.Dispatch.Static (unsafeEff_)
-import           Reflex.Effectful.Effect.JSM (JSM')
+import           Reflex.Effectful.Effect.JSM (JSM', liftJSM)
+import           Data.Maybe (fromMaybe)
 
 import           Control.Lens ((.~), (&), (%~))
 import           Control.Monad (when)
@@ -210,7 +212,32 @@ runBrowserRouting
   -> r                          -- ^ Fallback route for unrecognized URLs
   -> Eff (Routed t r : SetRoute t r : RouteToUrl r : es) a
   -> Eff es a
-runBrowserRouting _ fallback eff = do
+runBrowserRouting _ =
+  runBrowserRoutingWith
+    (encodeRoute @api)
+    (\url -> let (segs, qp) = urlToSegments url in decodeRoute @api segs qp)
+
+-- | Transport-agnostic browser routing interpreter. Accepts explicit
+-- encode/decode functions instead of a 'HasRoute' instance, so any
+-- URL-scheme provider (Servant HasRoute, obelisk-route Encoder wrapper,
+-- custom hand-rolled) plugs in without touching the interpreter.
+--
+-- 'runBrowserRouting' is a thin wrapper over this that supplies
+-- @encodeRoute \@api@ and @decodeRoute \@api@.
+runBrowserRoutingWith
+  :: forall r t es a.
+     ( KnownTimeline es t, Reflex t
+     , Hold t :> es, Sample t :> es, PostBuild t :> es
+     , TriggerEvent t :> es, PerformEvent t :> es
+     , DomRenderHook t :> es
+     , Dom t :> es, JSM' :> es, IOE :> es
+     )
+  => (r -> Text)                -- ^ Route → URL (path + query)
+  -> (Text -> Maybe r)          -- ^ URL → maybe route
+  -> r                          -- ^ Fallback route for unrecognized URLs
+  -> Eff (Routed t r : SetRoute t r : RouteToUrl r : es) a
+  -> Eff es a
+runBrowserRoutingWith encRoute decRoute fallback eff = do
   -- Shared trigger: both popstate AND setRoute fire through this
   (urlEv, fireUrl) <- newTriggerEvent
 
@@ -238,11 +265,7 @@ runBrowserRouting _ fallback eff = do
 
   -- Parse URL text into route values
   let parseOrFallback :: Text -> r
-      parseOrFallback url =
-        let (segs, qp) = urlToSegments url
-        in case (decodeRoute @api segs qp) of
-             Just r' -> r'
-             Nothing -> fallback
+      parseOrFallback url = fromMaybe fallback (decRoute url)
 
   -- Hold the current route (updated by both popstate AND setRoute)
   routeDyn <- holdDyn fallback (parseOrFallback <$> urlEv)
@@ -255,12 +278,28 @@ runBrowserRouting _ fallback eff = do
   -- 1. Strip Routed (outermost)
   -- 2. Strip SetRoute
   -- 3. Strip RouteToUrl (innermost)
-  interpret_ (\case AskRouteToUrl -> pure (encodeRoute @api))
+  interpret_ (\case AskRouteToUrl -> pure encRoute)
     $ interpret_ (\case
         SetRoute ev ->
-          performEvent_ $ R.ffor ev $ \route -> liftIO $ do
-            fire <- readIORef fireRef
-            fire (encodeRoute @api route)
+          -- Callback runs in JSM (not Eff es) — see performEvent_'s
+          -- signature in Reflex.Effectful.Effect.PerformEvent.
+          performEvent_ $ R.ffor ev $ \route -> do
+            let url = encRoute route
+            -- Actually update the browser URL (history.pushState).
+            -- Without this, setRoute updates internal app state but the
+            -- URL bar and history stack don't move: back button broken,
+            -- refresh returns to start URL, links unshareable.
+            _ <- JS.jsg ("window" :: Text)
+                   JS.! ("history" :: Text)
+                   JS.# ("pushState" :: Text)
+                   $ [ JS.toJSVal JS.jsNull
+                     , JS.toJSVal ("" :: Text)
+                     , JS.toJSVal url
+                     ]
+            -- Fire internal trigger so routeDyn updates in the same tick
+            liftIO $ do
+              fire <- readIORef fireRef
+              fire url
         ModifyRoute _ -> pure ()
       )
     $ interpret_ (\case AskRoute -> pure routeDyn)

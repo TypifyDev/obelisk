@@ -2,13 +2,14 @@
 
 module Jenga.Frontend.DomExtras where
 
-import Control.Lens ((%~))
+import Control.Lens ((%~), (.~), (&))
 import Jenga.Route.Frontend (RouteToUrl, SetRoute, askRouteToUrl)
-import Reflex (Reflex, Event, Dynamic, current, tag, updated, leftmost)
+import Reflex (Reflex, Event, Dynamic, current, tag, updated, leftmost, ffor)
 import Reflex.Dom.Core (GhcjsDomSpace, Element, EventResult, AttributeName(..)
                        , elementConfig_initialAttributes, elementConfig_eventSpec
-                       , addEventSpecFlags, Click(..), preventDefault, domEvent
-                       , InputElementConfig, InputElement)
+                       , addEventSpecFlags, EventName(Click), preventDefault, domEvent
+                       , ElementConfig(..)
+                       , (=:), _element_raw)
 import qualified GHCJS.DOM.Element as GElement
 import Control.Monad (when)
 import Data.Default (def)
@@ -17,10 +18,11 @@ import qualified Data.Map as Map
 import qualified Data.Text as T
 
 import Effectful (Eff, (:>))
-import Reflex.Effectful.Effect.Dom (Dom, element, blank)
+import Reflex.Effectful.Types (KnownTimeline)
+import Reflex.Effectful.Effect.Dom (Dom, element)
 import Reflex.Effectful.Effect.PostBuild (PostBuild, getPostBuild)
 import Reflex.Effectful.Effect.PerformEvent (PerformEvent, performEvent_)
-import Reflex.Effectful.Effect.JSM (JSM', liftJSM)
+import Reflex.Effectful.Effect.JSM (JSM')
 
 elDynHtmlAttr_
   :: ( Dom t :> es
@@ -28,22 +30,21 @@ elDynHtmlAttr_
      , PerformEvent t :> es
      , JSM' :> es
      , Reflex t
+     , KnownTimeline es t
      )
   => T.Text
   -> Map.Map T.Text T.Text
   -> Dynamic t T.Text
   -> Eff es (Element EventResult GhcjsDomSpace t)
 elDynHtmlAttr_ elementTag attrs_ html = do
-  let cfg = def & initialAttributes .~ Map.mapKeys (AttributeName Nothing) attrs_
+  let cfg = def & elementConfig_initialAttributes .~ Map.mapKeys (AttributeName Nothing) attrs_
   (e, _) <- element elementTag cfg $ pure ()
   postBuild <- getPostBuild
   performEvent_ $ ffor (leftmost [updated html, tag (current html) postBuild]) $ \h ->
-    liftJSM $ GElement.setInnerHTML (_element_raw e) h
+    -- performEvent_ expects Event t (JSM ()); GElement.setInnerHTML is MonadJSM
+    -- so it already unifies with JSM () — no lift needed.
+    GElement.setInnerHTML (_element_raw e) h
   return e
-  where
-    initialAttributes = undefined -- TODO: need lens from reflex-dom
-    _element_raw = undefined -- TODO: need accessor
-    ffor ev f = f <$> ev
 
 routeLinkImpl
   :: forall t es a route.
@@ -68,5 +69,3 @@ routeLinkImpl attrs route wrappedChild = do
   (e, a) <- element "a" cfg wrappedChild
   when targetBlank $ pure ()
   return (domEvent Click e, a)
-  where
-    ElementConfig = undefined -- TODO: needs reflex-dom types in scope

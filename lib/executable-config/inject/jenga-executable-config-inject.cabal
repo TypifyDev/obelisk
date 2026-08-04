@@ -1,6 +1,6 @@
 name: jenga-executable-config-inject
 version: 0.1
-cabal-version: >= 1.2
+cabal-version: 2.0
 build-type: Simple
 
 library
@@ -16,3 +16,13 @@ library
 
   exposed-modules: Jenga.ExecutableConfig.Inject
   ghc-options: -Wall -Werror -Wredundant-constraints -Wincomplete-uni-patterns -Wincomplete-record-updates -O
+
+  default-language: GHC2024
+  default-extensions:
+    FunctionalDependencies
+    OverloadedStrings
+    QuasiQuotes
+    RecordWildCards
+    RecursiveDo
+    TemplateHaskell
+    TypeFamilies

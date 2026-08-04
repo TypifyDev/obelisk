@@ -31,35 +31,34 @@ library
         ghc-typelits-natnormalise >= 0.7
       , ghc-typelits-knownnat     >= 0.7
   hs-source-dirs:   src
-  default-language: Haskell2010
+  default-language: GHC2024
   ghc-options:      -Wall
 
   default-extensions:
-    DataKinds
-    TypeOperators
-    KindSignatures
+    FunctionalDependencies
+    OverloadedStrings
+    QuasiQuotes
+    RecordWildCards
+    RecursiveDo
+    TemplateHaskell
     TypeFamilies
-    TypeApplications
-    ScopedTypeVariables
-    FlexibleContexts
-    FlexibleInstances
-    MultiParamTypeClasses
     AllowAmbiguousTypes
-    UndecidableInstances
     NoStarIsType
-    RankNTypes
-    PolyKinds
 
 test-suite grid-effect-test
   type:             exitcode-stdio-1.0
   main-is:          Test.hs
   hs-source-dirs:   test
-  default-language: Haskell2010
+  default-language: GHC2024
   ghc-options:      -Wall
   default-extensions:
-    DataKinds
-    TypeOperators
-    TypeApplications
+    FunctionalDependencies
+    OverloadedStrings
+    QuasiQuotes
+    RecordWildCards
+    RecursiveDo
+    TemplateHaskell
+    TypeFamilies
     NoStarIsType
   build-depends:
       base                      >= 4.14 && < 5

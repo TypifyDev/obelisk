@@ -9,11 +9,11 @@ import Language.Javascript.JSaddle
 import Network.URI as URI
 import Control.Lens ((^.))
 import Data.Maybe
-import Data.Text as T
+import Data.Text as T hiding (show)
 import Data.Text.Encoding as T
 
 import Effectful (Eff, (:>))
-import Reflex.Effectful.Effect.Jenga.Configs (Configs, getConfig)
+import Jenga.Frontend.Effectful.Configs (Configs, getConfig)
 
 getDomain :: URI -> Maybe T.Text
 getDomain baseUri_ =

@@ -4,13 +4,13 @@
 module Jenga.Frontend.Auth.ResetPassword where
 
 import Jenga.Frontend.Api (runAPI)
-import Jenga.Common.HasJengaConfig (BaseURL, Reader)
+import Jenga.Common.HasJengaConfig (BaseURL, HasConfig)
 import Jenga.Common.Auth
 import Jenga.Common.Errors
 import Templates.Types
 import Jenga.Route (HasRoute)
 import Jenga.Route.Frontend (Routed, askRoute)
-import Reflex (Reflex, Event, Dynamic, current, tag, leftmost, ffor, fanEither, (<$))
+import Reflex (Reflex, Event, Dynamic, current, tag, leftmost, ffor, fanEither)
 
 import Data.Proxy (Proxy)
 import Data.Signed (Signed)
@@ -20,13 +20,14 @@ import Rhyolite.Account (PasswordResetToken)
 
 import Effectful (Eff, (:>))
 import Effectful.Reader.Static (Reader)
+import Reflex.Effectful.Types (KnownTimeline)
 import Reflex.Effectful.Effect.Hold (Hold, holdDyn)
 import Reflex.Effectful.Effect.Dom (Dom)
 import Reflex.Effectful.Effect.PostBuild (PostBuild)
 import Reflex.Effectful.Effect.TriggerEvent (TriggerEvent)
 import Reflex.Effectful.Effect.PerformEvent (PerformEvent)
 import Reflex.Effectful.Effect.Prerender (Prerender)
-import Reflex.Effectful.Effect.Jenga.Configs (Configs)
+import Jenga.Frontend.Effectful.Configs (Configs)
 
 data ResetPasswordConfig t = ResetPasswordConfig
   { _resetPasswordConfig_errors :: Dynamic t (Maybe Text)
@@ -40,7 +41,7 @@ data ResetPasswordData t m = ResetPasswordData
   }
 
 resetPassword_FRP ::
-  forall api backendR t es.
+  forall api backendR cfg t es.
   ( Hold t :> es
   , Dom t :> es
   , PostBuild t :> es
@@ -52,13 +53,14 @@ resetPassword_FRP ::
   , HasRoute api backendR
   , Reader cfg :> es, HasConfig cfg BaseURL
   , Reflex t
+  , KnownTimeline es t
   )
   => Proxy api
   -> backendR
   -> ( ResetPasswordData t (Eff es) )
   -> Eff es (ResetPasswordConfig t)
 resetPassword_FRP proxy routeReset (ResetPasswordData pass conf submit) = do
-  token <- askRoute
+  token :: Dynamic t (Signed PasswordResetToken) <- askRoute
   let credentials = tag (current $ (,,) <$> token <*> value pass <*> value conf) submit
       (credError, validCredentials) = fanEither $ ffor credentials $ \(tok, pw, cf) ->
         case (pw == cf, T.null pw) of
@@ -66,7 +68,7 @@ resetPassword_FRP proxy routeReset (ResetPasswordData pass conf submit) = do
           (False, False) -> Left "Passwords don't match"
           (_, True) -> Left "Empty fields"
   (err :: Event t (RequestError ResetPasswordError), result :: Event t (AuthToken, UserType)) <-
-    runAPI @api proxy routeReset validCredentials
+    runAPI @api @backendR @t @es @cfg proxy routeReset validCredentials
   errors <- holdDyn Nothing $ leftmost $ fmap (Just <$>) [credError, showUser <$> err]
   pure $ ResetPasswordConfig errors result
   where value = undefined -- TODO: InputEl accessor

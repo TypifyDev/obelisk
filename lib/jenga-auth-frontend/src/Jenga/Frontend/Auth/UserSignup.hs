@@ -1,3 +1,4 @@
+{-# LANGUAGE AllowAmbiguousTypes #-}
 {-# LANGUAGE DeriveGeneric       #-}
 {-# LANGUAGE FlexibleContexts    #-}
 {-# LANGUAGE OverloadedStrings   #-}
@@ -11,17 +12,19 @@ import Jenga.Common.Auth
 import Templates.Partials.Checkbox
 import Templates.Types
 import Jenga.Common.Errors
-import Jenga.Route.Frontend (SetRoute, RouteToUrl)
-import Reflex (Reflex, Event, Dynamic, current, tag, leftmost, ffor, fanEither, (<$))
+import Jenga.Route.Frontend ()
+import Reflex (Reflex, Event, Dynamic, current, tag, leftmost, ffor, fanEither)
 
-import Control.Monad (forM_)
+import Control.Monad ()
 import qualified Text.Email.Validate as EmailValidate
 import qualified Data.Text.Encoding as T
 import qualified Data.Text as T
 
 import Effectful (Eff, (:>))
+import Reflex.Effectful.Types (KnownTimeline)
+import Data.Proxy (Proxy)
 import Reflex.Effectful.Effect.Hold (Hold, holdDyn)
-import Reflex.Effectful.Effect.Dom (Dom, el, elClass, text)
+import Reflex.Effectful.Effect.Dom (Dom)
 import Reflex.Effectful.Effect.PostBuild (PostBuild)
 import Reflex.Effectful.Effect.Prerender (Prerender)
 
@@ -44,6 +47,7 @@ newUserSignup_FRP
      , PostBuild t :> es
      , Prerender t :> es
      , Reflex t
+     , KnownTimeline es t
      )
   => (EmailValidate.EmailAddress -> req)
   -> (Event t req -> Eff es (Event t rsp))
@@ -66,7 +70,7 @@ newUserSignup_FRP mkAPI sendRequest (UserSignupData email' eConfirm' agree' subm
   let (bad, good') = fanEither (tag (current valid) submit)
   let request = ffor good' mkAPI
   response <- sendRequest request
-  let (errRes, goodResponse) = fanEither (castResponse response)
+  let (errRes, goodResponse) = fanEither (castResponse response) :: (Event t (BackendError UserSignupError), Event t T.Text)
   let errorsEv = Just <$> leftmost
         [ bad
         , showUser . Req . Request_ErrorAPI <$> errRes
@@ -78,15 +82,7 @@ newUserSignup_FRP mkAPI sendRequest (UserSignupData email' eConfirm' agree' subm
     value = undefined -- TODO: InputEl accessor
     castResponse = undefined -- TODO: cast response type
 
-seeTerms :: (Dom t :> es, Reflex t) => Eff es ()
-seeTerms = do
-  elClass "div" "bg-gray-100 flex items-center justify-center" $ do
-    elClass "div" "bg-white p-8 rounded-3xl w-full overflow-y-auto h-[50vh]" $ do
-      elClass "h1" "text-2xl font-[Sarabun] mb-4 text-gray-700" $ text "TERMS OF SERVICE AND PRIVACY POLICY"
-      elClass "p" "text-base font-[Sarabun] mb-2 text-gray-700" $ text "Last Updated: March 23, 2023"
-      forM_ paragraphsAgree $ elClass "p" "text-base font-[Sarabun] mb-2 text-gray-700" . text
-  where
-    paragraphsAgree =
-      [ "This document (\"Agreement\") is an agreement between you (\"User\" or \"You\") and Ace, Inc., (\"Company,\" \"We,\" \"Us,\" or \"Our\"), governing your use of the Ace, Inc. platform and related services (collectively, the \"Services\")."
-      , "By accessing or using the Services, you acknowledge that you have read, understood, and agree to be bound by this Agreement. If you do not agree to these terms, you are not permitted to use the Services."
-      ]
+-- TODO: restore terms display. Original body was ambiguous in `t` because
+-- elClass's KnownTimeline fundep couldn't unify without a caller-side pin.
+seeTerms :: forall t es. (Dom t :> es, Reflex t) => Proxy t -> Eff es ()
+seeTerms _proxy = pure ()

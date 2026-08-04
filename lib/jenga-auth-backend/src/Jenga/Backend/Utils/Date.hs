@@ -13,7 +13,7 @@ module Jenga.Backend.Utils.Date where
 
 import Data.Time
 import "template-haskell" Language.Haskell.TH
-import "template-haskell" Language.Haskell.TH.Syntax
+import "template-haskell" Language.Haskell.TH.Syntax ()
 import Control.Monad.IO.Class
 import Control.Monad
 
@@ -22,7 +22,6 @@ import Control.Monad
 
 type GivesQ a = Q Exp
 
-deriving instance Lift Day
 
 -- | Extremely safe date constant constructor, used with date-sensitive migrations
 validGregorian :: Integer -> Int -> Int -> GivesQ Day
