@@ -10,18 +10,18 @@ import Rhyolite.DB.Beam
 import Database.Beam.Query
 import Database.Beam.Postgres
 
-import Control.Monad.IO.Class
+import Control.Monad.IO.Class ()
 import Control.Exception
 import Data.Pool
 import qualified Data.Text as T
 import Prelude hiding (log)
 
 import Effectful (Eff, (:>), IOE)
-import Effectful.Reader.Static (Reader)
+import Effectful.Reader.Static ()
 
 
 reportError
-  :: forall db es be n a.
+  :: forall db cfg es be n a.
     ( IOE :> es
     , Show a
     , HasJengaTable Postgres db SendEmailTask
@@ -31,10 +31,10 @@ reportError
     )
   => a
   -> Eff es ()
-reportError = newAdminEmail @db "Error on production" . T.pack . show
+reportError = newAdminEmail @db @cfg @es @be @n "Error on production" . T.pack . show
 
 reportOnError
-  :: forall db es be n a b.
+  :: forall db cfg es be n a b.
     ( IOE :> es
     , Show a
     , HasJengaTable Postgres db SendEmailTask
@@ -44,14 +44,14 @@ reportOnError
     )
   => Either a b -> Eff es ()
 reportOnError = \case
-  Left err -> reportError @db err
+  Left err -> reportError @db @cfg @es @be @n err
   Right _ -> pure ()
 
 catchToss :: IO a -> IO ()
 catchToss m = catch (m >> pure ()) (\(_ :: IOException) -> pure ())
 
 reportLog
-  :: forall db es log.
+  :: forall db cfg es log.
      ( Loggable log
      , IOE :> es
      , HasJengaTable Postgres db LogItemRow
@@ -62,7 +62,7 @@ reportLog
   -> Eff es ()
 reportLog isUrgent item = do
   (logTbl :: PgTable Postgres db LogItemRow) <- asksTableM
-  withDbEnv $ do
+  withDbEnv @cfg $ do
     runInsert $ insert logTbl $ insertExpressions
       [ LogItemRow
         default_

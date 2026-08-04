@@ -1,3 +1,12 @@
+{-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE StandaloneDeriving #-}
+{-# LANGUAGE TypeApplications #-}
+{-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE UndecidableInstances #-}
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 
@@ -26,7 +35,9 @@ import Data.Functor.Identity (Identity)
 
 
 
-deriving instance Generic ((,,,,,,,,) a b c d e f g h i)
+-- Base 4.20+ provides Generic (,,,,,,,,) natively; the manual standalone
+-- deriving would duplicate it (GHC-59692).
+-- deriving instance Generic ((,,,,,,,,) a b c d e f g h i)
 
 -- | I copied this cuz its not exported
 -- TODO: upstream this bullshit module

@@ -24,7 +24,7 @@ import Data.Pool
 import Web.ClientSession as CS
 import Data.Signed
 import Control.Monad
-import Control.Monad.IO.Class
+import Control.Monad.IO.Class (liftIO)
 import Control.Applicative (some)
 import Text.Parsec
 import Text.Email.Validate
@@ -32,10 +32,10 @@ import qualified Data.Text.Encoding as T
 import qualified Data.Text as T
 
 import Effectful (Eff, (:>), IOE)
-import Effectful.Reader.Static (Reader)
+import Effectful.Reader.Static ()
 
 
-type AddUsersConstraint api db be es n frontendRoute =
+type AddUsersConstraint api db cfg be es n frontendRoute =
      ( IOE :> es
      , MonadSnap (Eff es)
      , HasJsonNotifyTbl be SendEmailTask n
@@ -53,7 +53,7 @@ type AddUsersConstraint api db be es n frontendRoute =
 
 
 addUsersHandler
-  :: forall api db be es n frontendRoute x.
+  :: forall api db cfg be es n frontendRoute x.
      ( IOE :> es
      , MonadSnap (Eff es)
      , HasJsonNotifyTbl be SendEmailTask n
@@ -86,11 +86,11 @@ addUsersHandler proxy acctID emails resetRoute mkEmail = do
         Left _ -> pure $ Left . BUserError $ InvalidEmail_AddUser -- "Invalid email in list"
         Right emails' -> do
           results <- forM emails' $ \email -> do
-            mOrgName <- withDbEnv $ getOrgName uTypeTbl acctID
+            mOrgName <- withDbEnv @cfg $ getOrgName uTypeTbl acctID
             case mOrgName of
               Nothing -> pure $ Left . BUserError $ NoOrgCode $ T.pack . show $ acctID --"No organization code found"
               Just orgName -> do
-                createNewAccountWithSetupEmail @api @db proxy email (IsGroupUser email orgName) resetRoute mkEmail >>= \case
+                createNewAccountWithSetupEmail @api @db @cfg proxy email (IsGroupUser email orgName) resetRoute mkEmail >>= \case
                   Left bError -> pure $ Left $ AddUser_Signup <$> bError
                   Right a -> pure $ Right a
           pure $ () <$ sequenceA results

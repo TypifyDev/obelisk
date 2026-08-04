@@ -17,16 +17,16 @@ import Database.Beam.Schema
 import Web.ClientSession as CS
 import Data.Signed
 import Data.Pool
-import Control.Monad.IO.Class
+import Control.Monad.IO.Class ()
 import Text.Email.Validate
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as T
 
 import Effectful (Eff, (:>), IOE)
-import Effectful.Reader.Static (Reader)
+import Effectful.Reader.Static ()
 
 redeemLinkHandler
-  :: forall api db frontendRoute be es x n.
+  :: forall api db cfg frontendRoute be es x n.
      ( IOE :> es
      , Database Postgres db
      , Reader cfg :> es, HasConfig cfg AdminEmail
@@ -49,7 +49,7 @@ redeemLinkHandler
 redeemLinkHandler proxy (codeLink, Email email) resetRoute mkEmail = do
   (inviteTbl :: PgTable Postgres db InviteLink) <- asksTableM
 
-  withDbEnv (getInviteLinkByCode inviteTbl codeLink) >>= \case
+  withDbEnv @cfg (getInviteLinkByCode inviteTbl codeLink) >>= \case
     Nothing -> pure $ Left . BUserError $ NoOrgCode_RedeemLink
     Just (InviteLink orgName code' mNLeft)
       | mNLeft == (Just 0) -> pure $ Left . BUserError $ CreditsDepleted orgName
@@ -57,10 +57,10 @@ redeemLinkHandler proxy (codeLink, Email email) resetRoute mkEmail = do
           case validate . T.encodeUtf8 $ email of
             Left _ -> pure $ Left . BUserError $ InvalidEmail_RedeemLink
             Right email' -> do
-              createNewAccountWithSetupEmail @api @db proxy email' (IsGroupUser email' orgName) resetRoute mkEmail >>= \case
+              createNewAccountWithSetupEmail @api @db @cfg proxy email' (IsGroupUser email' orgName) resetRoute mkEmail >>= \case
                 Left e -> pure $ Left $ RedeemLink_Signup <$> e
                 Right () -> do
                   case mNLeft of
                     Nothing -> pure ()
-                    Just nLeft -> withDbEnv $ setLinkNumLeft inviteTbl code' (nLeft - 1)
+                    Just nLeft -> withDbEnv @cfg $ setLinkNumLeft inviteTbl code' (nLeft - 1)
                   pure $ Right ()

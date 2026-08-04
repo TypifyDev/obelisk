@@ -39,6 +39,7 @@ library
         Jenga.Common.ScrubPrefix
         Jenga.Common.Stripe
         Jenga.Common.Log
+        Jenga.Common.Company
 
   default-language: Haskell2010
   ghc-options: -Wall -Werror -O -fno-show-valid-hole-fits

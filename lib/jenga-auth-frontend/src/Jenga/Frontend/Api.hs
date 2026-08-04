@@ -1,155 +1,280 @@
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE AllowAmbiguousTypes #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE LambdaCase #-}
 
+-- | JSM/reflex-m and Effectful dual APIs for jenga-auth-frontend HTTP work.
+--
+-- The primary functions ('runAPI', 'runAPIPostBuild', etc.) match the
+-- pre-Effectful-port reflex-m signatures — @ReaderT cfg m@ — so callers
+-- written in traditional reflex-widget style continue to work.
+--
+-- Effectful (@Eff es@) variants are suffixed @-Eff@ ('runAPIEff',
+-- 'runAPIPostBuildEff', etc.) for widgets that live in the Effectful
+-- port. Both sets share the same monad-agnostic utilities
+-- ('decodeXhrAnnotate', 'withHeaders', 'withCred', 'fanResponse'',
+-- 'annotateError').
 module Jenga.Frontend.Api where
 
 import Jenga.Common.HasJengaConfig
 import Jenga.Common.Errors
-import Jenga.Route (HasRoute, renderRoute)
-import Reflex (Reflex, Event, Dynamic, current, gate, leftmost, never, ffor, switchDyn, mapMaybe)
-import Reflex.Dom.Core (XhrRequest, XhrResponse, postJson
-                       , xhrRequest_config, xhrRequestConfig_withCredentials
-                       , xhrRequestConfig_headers, _xhrResponse_responseText, comment)
+import Jenga.Configs
+import Jenga.Route
+import Jenga.Route (HasRoute)
+import Reflex.Dom.Core
 
+import Control.Monad.Trans.Reader (ReaderT)
+import Control.Monad.Fix
 import Data.Typeable
 import Data.Aeson as Aeson
 import qualified Data.Aeson.KeyMap as Aeson
 import qualified Data.Aeson.Key as Aeson
 import Text.Parsec
+import Language.Javascript.JSaddle (MonadJSM)
 import Control.Applicative (some)
 import Data.Bifunctor
 import Data.Maybe
+import Data.Functor (void)
 import Data.Functor.Identity
-import Data.Proxy (Proxy)
+import Data.Proxy
 import qualified Data.Map as Map
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as T
 import qualified Data.ByteString.Lazy as LBS
 import Control.Lens ((.~), (&))
 
-import Effectful (Eff, (:>), IOE)
-import Effectful.Reader.Static (Reader, ask)
-import Reflex.Effectful.Effect.Hold (Hold, holdDyn)
-import Reflex.Effectful.Effect.PostBuild (PostBuild, getPostBuild)
-import Reflex.Effectful.Effect.TriggerEvent (TriggerEvent)
-import Reflex.Effectful.Effect.PerformEvent (PerformEvent, performRequestAsync)
+-- Effectful imports (for the -Eff variants below)
+import Effectful (Eff, (:>))
+import Reflex.Effectful.Types (KnownTimeline)
+import Effectful.Reader.Static ()
+import qualified Reflex as R (Event, current, gate, leftmost, never, switchDyn, Reflex, fanEither)
+import qualified Reflex.Effectful.Effect.Hold as EHold
+import qualified Reflex.Effectful.Effect.PostBuild as EPostBuild
+import qualified Reflex.Effectful.Effect.TriggerEvent as ETrigger
+import qualified Reflex.Effectful.Effect.PerformEvent as EPerform
 import Reflex.Effectful.Effect.Dom (Dom)
-import Reflex.Effectful.Effect.Prerender (Prerender, prerender)
-import Reflex.Effectful.Effect.JSM (JSM')
-import Reflex.Effectful.Effect.Jenga.Configs (Configs)
+import qualified Reflex.Effectful.Effect.Prerender as EPre
+import Reflex.Effectful.Effect.JSM ()
+import Jenga.Frontend.Effectful.Configs (Configs)
 
 eitherDecodeText :: FromJSON a => T.Text -> Either String a
 eitherDecodeText = eitherDecode . LBS.fromStrict . T.encodeUtf8
 
+-- | Convenience function to decode JSON-encoded responses.
 decodeXhrResponse' :: FromJSON a => XhrResponse -> Either String a
 decodeXhrResponse' = (fromMaybe $ Left "no response text") . fmap eitherDecodeText . _xhrResponse_responseText
 
-type RunAPI t es =
-  ( Configs :> es
-  , Prerender t :> es
-  , Dom t :> es
-  , Hold t :> es
-  , PostBuild t :> es
-  , Reflex t
+-- ─── Constraint synonym for the reflex-m API surface ────────────────
+type RunAPI t m =
+  ( HasConfigs (Client m)
+  , Prerender t m
+  , Applicative m
+  , DomBuilder t m
+  , MonadHold t m
+  , MonadFix m
+  , PostBuild t m
   )
 
+-- ─── reflex-m primary APIs ──────────────────────────────────────────
+
+-- | Generic Req -> Response function (reflex-m).
 runAPI
-  :: forall api r t es toJson fromJson err.
-     ( ToJSON toJson, FromJSON fromJson, Typeable fromJson
-     , Typeable err, FromJSON err
-     , Configs :> es, Prerender t :> es, Dom t :> es
-     , HasRoute api r, Reader cfg :> es, HasConfig cfg BaseURL
-     , PerformEvent t :> es, TriggerEvent t :> es
-     , Reflex t
+  :: forall fe backendRoute cfg toJson fromJson t m err.
+     ( ToJSON toJson
+     , FromJSON fromJson, Typeable fromJson
+     , FromJSON err, Typeable err
+     , HasConfigs (Client m)
+     , Prerender t m
+     , Applicative m
+     , DomBuilder t m
+     , HasConfig cfg (FullRouteEncoder backendRoute fe)
+     , HasConfig cfg BaseURL
      )
-  => Proxy api
-  -> r
+  => R backendRoute
   -> Event t toJson
-  -> Eff es (Event t (RequestError err), Event t fromJson)
-runAPI proxy route evPayload = runAPIWithHeaders proxy route mempty evPayload
+  -> ReaderT cfg m (Event t (RequestError err), Event t fromJson)
+runAPI route evPayload = runAPIWithHeaders @fe route mempty evPayload
 
 runAPIWithHeaders
-  :: forall api r t es toJson fromJson err.
-     ( ToJSON toJson, FromJSON fromJson, Typeable fromJson
-     , Typeable err, FromJSON err
-     , Configs :> es, Prerender t :> es, Dom t :> es
-     , HasRoute api r, Reader cfg :> es, HasConfig cfg BaseURL
-     , PerformEvent t :> es, TriggerEvent t :> es
-     , Reflex t
+  :: forall fe backendRoute cfg toJson fromJson t m err.
+     ( ToJSON toJson
+     , FromJSON fromJson, Typeable fromJson
+     , FromJSON err, Typeable err
+     , HasConfigs (Client m)
+     , Prerender t m
+     , Applicative m
+     , DomBuilder t m
+     , HasConfig cfg (FullRouteEncoder backendRoute fe)
+     , HasConfig cfg BaseURL
      )
-  => Proxy api
-  -> r
+  => R backendRoute
   -> Map.Map T.Text T.Text
   -> Event t toJson
-  -> Eff es (Event t (RequestError err), Event t fromJson)
-runAPIWithHeaders proxy route headers evPayload = do
+  -> ReaderT cfg m (Event t (RequestError err), Event t fromJson)
+runAPIWithHeaders route headers evPayload = do
   fmap fanResponse' $ runRequest $
-    performJSONRequestResponseAnnotatedWithHeaders proxy route headers evPayload
+    performJSONRequestResponseAnnotatedWithHeaders @fe route headers evPayload
 
+-- | Mutually exclusive to when you would use runAPIResponseGated
 runAPIPostBuild
-  :: forall api r t es toJson fromJson err.
-     ( ToJSON toJson, FromJSON err, FromJSON fromJson, Typeable fromJson, Typeable err
-     , Configs :> es, Prerender t :> es, Dom t :> es
-     , HasRoute api r, Reader cfg :> es, HasConfig cfg BaseURL
-     , PerformEvent t :> es, TriggerEvent t :> es
-     , PostBuild t :> es, Hold t :> es
-     , Reflex t
+  :: forall fe backendRoute cfg toJson fromJson t m err.
+     ( ToJSON toJson
+     , FromJSON err
+     , FromJSON fromJson, Typeable fromJson, Typeable err
+     , HasConfigs (Client m)
+     , Prerender t m
+     , Applicative m
+     , DomBuilder t m
+     , HasConfig cfg (FullRouteEncoder backendRoute fe)
+     , HasConfig cfg BaseURL
      )
-  => Proxy api
-  -> r
+  => R backendRoute
   -> (Event t () -> Event t toJson)
-  -> Eff es (Event t (RequestError err), Event t fromJson)
-runAPIPostBuild proxy route withPb = do
+  -> ReaderT cfg m (Event t (RequestError err), Event t fromJson)
+runAPIPostBuild route withPb = runAPIPostBuildWithHeaders @fe route mempty withPb
+
+runAPIPostBuildWithHeaders
+  :: forall fe backendRoute cfg toJson fromJson t m err.
+     ( ToJSON toJson
+     , FromJSON err
+     , FromJSON fromJson, Typeable fromJson, Typeable err
+     , HasConfigs (Client m)
+     , Prerender t m
+     , Applicative m
+     , DomBuilder t m
+     , HasConfig cfg (FullRouteEncoder backendRoute fe)
+     , HasConfig cfg BaseURL
+     )
+  => R backendRoute
+  -> Map.Map T.Text T.Text
+  -> (Event t () -> Event t toJson)
+  -> ReaderT cfg m (Event t (RequestError err), Event t fromJson)
+runAPIPostBuildWithHeaders route headers withPb = do
   fmap fanResponse' $ runRequest' $ performWithPb
   where
     runRequest' req = fmap switchDyn $ prerender (pure never) $ getPostBuild >>= req
-    performWithPb = performJSONRequestResponseAnnotatedWithHeaders proxy route mempty . withPb
+    performWithPb = performJSONRequestResponseAnnotatedWithHeaders @fe route headers . withPb
 
+-- | Mutually exclusive to when you would use runAPIPostBuild
 runAPIResponseGated
-  :: forall api r t es toJson fromJson err.
-     ( ToJSON toJson, FromJSON err, FromJSON fromJson, Typeable fromJson, Typeable err
-     , Configs :> es, Prerender t :> es, Dom t :> es
-     , HasRoute api r, Reader cfg :> es, HasConfig cfg BaseURL
-     , PerformEvent t :> es, TriggerEvent t :> es
-     , Hold t :> es
-     , Reflex t
+  :: forall fe backendRoute cfg toJson fromJson t m err.
+     ( ToJSON toJson
+     , FromJSON err
+     , FromJSON fromJson, Typeable fromJson, Typeable err
+     , HasConfigs (Client m)
+     , Prerender t m
+     , DomBuilder t m
+     , MonadHold t m
+     , MonadFix m
+     , HasConfig cfg (FullRouteEncoder backendRoute fe)
+     , HasConfig cfg BaseURL
      )
-  => Proxy api
-  -> r
+  => R backendRoute
   -> Event t toJson
-  -> Eff es (Event t (RequestError err), Event t fromJson)
-runAPIResponseGated proxy route evPayload = do
-  -- Note: mdo requires MonadFix which effectful supports
-  shouldFire <- holdDyn True $ leftmost [ False <$ evPayload ]
-  (err, res) <- runAPI proxy route $ gate (current shouldFire) evPayload
-  -- Re-enable after response
-  shouldFire' <- holdDyn True $ leftmost [ False <$ evPayload, True <$ res, True <$ err ]
+  -> ReaderT cfg m (Event t (RequestError err), Event t fromJson)
+runAPIResponseGated route evPayload = mdo
+  shouldFire <- holdDyn True $ leftmost [ False <$ evPayload , True <$ res, True <$ err ]
+  (err, res) <- runAPI @fe route $ gate (current shouldFire) evPayload
   pure (err, res)
 
-performJSONRequestResponseAnnotatedWithHeaders
-  :: forall api r t es toJson fromJson.
-     ( Configs :> es
-     , PerformEvent t :> es
-     , TriggerEvent t :> es
+-- | Decode-only variant (reflex-m).
+performJSONRequestResponse
+  :: forall fe backendRoute cfg toJson fromJson t m.
+     ( HasConfigs m
+     , MonadJSM (Performable m)
+     , PerformEvent t m
+     , TriggerEvent t m
      , ToJSON toJson
      , FromJSON fromJson
-     , Typeable fromJson
-     , HasRoute api r
-     , Reader cfg :> es, HasConfig cfg BaseURL
-     , Reflex t
+     , HasConfig cfg (FullRouteEncoder backendRoute fe)
+     , HasConfig cfg BaseURL
      )
-  => Proxy api
-  -> r
+  => R backendRoute
+  -> Event t toJson
+  -> ReaderT cfg m (Event t (Either ErrorRead fromJson))
+performJSONRequestResponse route jsonEv = do
+  (fmap . fmap) decodeXhrResponse' $ performJSONRequest @fe route jsonEv
+
+performJSONRequestResponseAnnotated
+  :: forall fe backendRoute cfg t m toJson fromJson.
+     ( HasConfigs m
+     , MonadJSM (Performable m)
+     , PerformEvent t m
+     , TriggerEvent t m
+     , ToJSON toJson
+     , FromJSON fromJson, Typeable fromJson
+     , HasConfig cfg (FullRouteEncoder backendRoute fe)
+     , HasConfig cfg BaseURL
+     )
+  => R backendRoute
+  -> Event t toJson
+  -> ReaderT cfg m (Event t (Either T.Text fromJson))
+performJSONRequestResponseAnnotated route jsonEv =
+  performJSONRequestResponseAnnotatedWithHeaders @fe route mempty jsonEv
+
+performJSONRequestResponseAnnotatedWithHeaders
+  :: forall fe backendRoute cfg t m toJson fromJson.
+     ( HasConfigs m
+     , MonadJSM (Performable m)
+     , PerformEvent t m
+     , TriggerEvent t m
+     , ToJSON toJson
+     , FromJSON fromJson, Typeable fromJson
+     , HasConfig cfg (FullRouteEncoder backendRoute fe)
+     , HasConfig cfg BaseURL
+     )
+  => R backendRoute
   -> Map.Map T.Text T.Text
   -> Event t toJson
-  -> Eff es (Event t (Either T.Text fromJson))
-performJSONRequestResponseAnnotatedWithHeaders proxy route headers jsonEv = do
-  evXhrResponse <- performJSONRequestWithHeaders proxy route headers jsonEv
-  routeLink <- renderFullRouteBE proxy route
+  -> ReaderT cfg m (Event t (Either T.Text fromJson))
+performJSONRequestResponseAnnotatedWithHeaders route headers jsonEv = do
+  evXhrResponse :: Event t XhrResponse <- performJSONRequestWithHeaders @fe route headers jsonEv
+  routeLink <- renderFullRouteBE @fe route
   pure $ leftmost
     [ decodeXhrAnnotate (getLink routeLink) <$> evXhrResponse
     ]
+
+performJSONRequestWithHeaders
+  :: forall fe backendRoute json cfg t m.
+     ( MonadJSM (Performable m)
+     , TriggerEvent t m
+     , PerformEvent t m
+     , ToJSON json
+     , HasConfigs m
+     , HasConfig cfg (FullRouteEncoder backendRoute fe)
+     , HasConfig cfg BaseURL
+     )
+  => R backendRoute
+  -> Map.Map T.Text T.Text
+  -> Event t json
+  -> ReaderT cfg m (Event t XhrResponse)
+performJSONRequestWithHeaders route headers jsonEv = do
+  routeText <- renderFullRouteBE @fe route
+  performRequestAsync $ withHeaders headers . withCred . postJson (getLink routeText) <$> jsonEv
+
+performJSONRequest
+  :: forall fe backendRoute json cfg t m.
+     ( MonadJSM (Performable m)
+     , TriggerEvent t m
+     , PerformEvent t m
+     , ToJSON json
+     , HasConfigs m
+     , HasConfig cfg (FullRouteEncoder backendRoute fe)
+     , HasConfig cfg BaseURL
+     )
+  => R backendRoute
+  -> Event t json
+  -> ReaderT cfg m (Event t XhrResponse)
+performJSONRequest route jsonEv = do
+  routeText <- renderFullRouteBE @fe route
+  performRequestAsync $ withCred <$> postJson (getLink routeText) <$> jsonEv
+
+runRequest :: ( Prerender t m
+              , Applicative m
+              ) => Client m (Event t r) -> m (Event t r)
+runRequest req = fmap switchDyn $ prerender (pure never) ( comment "runRequest:Hydrated" >> req )
+
+-- ─── Monad-agnostic utilities (used by both APIs) ───────────────────
 
 decodeXhrAnnotate
   :: forall fromJson.
@@ -208,10 +333,146 @@ annotateError routeStr actualBody expectedType baseError =
 showType :: forall a. Typeable a => a -> String
 showType _ = show $ typeRep (Proxy :: Proxy a)
 
-performJSONRequestWithHeaders
-  :: forall api r t es json.
-     ( PerformEvent t :> es
-     , TriggerEvent t :> es
+withCred :: XhrRequest a -> XhrRequest a
+withCred xhr = xhr & xhrRequest_config . xhrRequestConfig_withCredentials .~ True
+
+withHeaders :: Map.Map T.Text T.Text -> XhrRequest a -> XhrRequest a
+withHeaders headers xhr = xhr & xhrRequest_config . xhrRequestConfig_headers .~ headers
+
+toEith :: Maybe a -> Either T.Text a
+toEith = \case { Just a -> Right a ; Nothing -> Left "unable to parse response, please report this error" }
+
+type ApiBE e a = Either (BackendError e) a
+
+fanResponse
+  :: Reflex t
+  => Event t (Either ErrorRead (Either (BackendError e) a))
+  -> (Event t ErrorRead, Event t (BackendError e), Event t a)
+fanResponse res =
+  let
+    (errRead, apiResult) = R.fanEither res
+    (errApi, good) = R.fanEither apiResult
+  in (errRead, errApi, good)
+
+fanResponse'
+  :: Reflex t
+  => Event t (Either T.Text (Either (BackendError e) a))
+  -> (Event t (RequestError e), Event t a)
+fanResponse' res =
+  let
+    (errRead, apiResult) = R.fanEither res
+    (errApi, good) = R.fanEither apiResult
+    err = leftmost [ Request_ErrorAPI <$> errApi
+                   , Request_ErrorRead <$> errRead
+                   ]
+  in
+    (err, good)
+
+-- ─── Effectful (Eff es) variants (suffixed @-Eff@) ──────────────────
+--
+-- Callers written against the Effectful port import these directly. Widget
+-- and JSM-based callers use the un-suffixed versions above.
+
+runAPIEff
+  :: forall api r t es cfg toJson fromJson err.
+     ( ToJSON toJson, FromJSON fromJson, Typeable fromJson
+     , Typeable err, FromJSON err
+     , Configs :> es, EPre.Prerender t :> es, Dom t :> es
+     , HasRoute api r, Reader cfg :> es, HasConfig cfg BaseURL
+     , EPerform.PerformEvent t :> es, ETrigger.TriggerEvent t :> es, KnownTimeline es t
+     , Reflex t
+     )
+  => Proxy api
+  -> r
+  -> Event t toJson
+  -> Eff es (Event t (RequestError err), Event t fromJson)
+runAPIEff proxy route evPayload = runAPIWithHeadersEff @api @r @t @es @cfg proxy route mempty evPayload
+
+runAPIWithHeadersEff
+  :: forall api r t es cfg toJson fromJson err.
+     ( ToJSON toJson, FromJSON fromJson, Typeable fromJson
+     , Typeable err, FromJSON err
+     , Configs :> es, EPre.Prerender t :> es, Dom t :> es
+     , HasRoute api r, Reader cfg :> es, HasConfig cfg BaseURL
+     , EPerform.PerformEvent t :> es, ETrigger.TriggerEvent t :> es, KnownTimeline es t
+     , Reflex t
+     )
+  => Proxy api
+  -> r
+  -> Map.Map T.Text T.Text
+  -> Event t toJson
+  -> Eff es (Event t (RequestError err), Event t fromJson)
+runAPIWithHeadersEff proxy route headers evPayload = do
+  fmap fanResponse' $ runRequestEff $
+    performJSONRequestResponseAnnotatedWithHeadersEff @api @r @t @es @cfg proxy route headers evPayload
+
+runAPIPostBuildEff
+  :: forall api r t es cfg toJson fromJson err.
+     ( ToJSON toJson, FromJSON err, FromJSON fromJson, Typeable fromJson, Typeable err
+     , Configs :> es, EPre.Prerender t :> es, Dom t :> es
+     , HasRoute api r, Reader cfg :> es, HasConfig cfg BaseURL
+     , EPerform.PerformEvent t :> es, ETrigger.TriggerEvent t :> es, KnownTimeline es t
+     , EPostBuild.PostBuild t :> es, EHold.Hold t :> es
+     , Reflex t
+     )
+  => Proxy api
+  -> r
+  -> (Event t () -> Event t toJson)
+  -> Eff es (Event t (RequestError err), Event t fromJson)
+runAPIPostBuildEff proxy route withPb = do
+  fmap fanResponse' $ runRequest' $ performWithPb
+  where
+    runRequest' req = fmap R.switchDyn $ EPre.prerender (pure R.never) $ EPostBuild.getPostBuild >>= req
+    performWithPb = performJSONRequestResponseAnnotatedWithHeadersEff @api @r @t @es @cfg proxy route mempty . withPb
+
+runAPIResponseGatedEff
+  :: forall api r t es cfg toJson fromJson err.
+     ( ToJSON toJson, FromJSON err, FromJSON fromJson, Typeable fromJson, Typeable err
+     , Configs :> es, EPre.Prerender t :> es, Dom t :> es
+     , HasRoute api r, Reader cfg :> es, HasConfig cfg BaseURL
+     , EPerform.PerformEvent t :> es, ETrigger.TriggerEvent t :> es, KnownTimeline es t
+     , EHold.Hold t :> es
+     , Reflex t
+     )
+  => Proxy api
+  -> r
+  -> Event t toJson
+  -> Eff es (Event t (RequestError err), Event t fromJson)
+runAPIResponseGatedEff proxy route evPayload = do
+  shouldFire <- EHold.holdDyn True $ R.leftmost [ False <$ evPayload ]
+  (err, res) <- runAPIEff @api @r @t @es @cfg proxy route $ R.gate (R.current shouldFire) evPayload
+  _shouldFire' <- EHold.holdDyn True $ R.leftmost [ False <$ evPayload, True <$ res, True <$ err ]
+  pure (err, res)
+
+performJSONRequestResponseAnnotatedWithHeadersEff
+  :: forall api r t es cfg toJson fromJson.
+     ( Configs :> es
+     , EPerform.PerformEvent t :> es
+     , ETrigger.TriggerEvent t :> es
+     , ToJSON toJson
+     , FromJSON fromJson
+     , Typeable fromJson
+     , HasRoute api r
+     , Reader cfg :> es, HasConfig cfg BaseURL
+     , Reflex t
+     , KnownTimeline es t
+     )
+  => Proxy api
+  -> r
+  -> Map.Map T.Text T.Text
+  -> Event t toJson
+  -> Eff es (Event t (Either T.Text fromJson))
+performJSONRequestResponseAnnotatedWithHeadersEff proxy route headers jsonEv = do
+  evXhrResponse <- performJSONRequestWithHeadersEff @api @r @t @es @cfg proxy route headers jsonEv
+  routeLink <- renderFullRouteBE @api @r @cfg @es proxy route
+  pure $ R.leftmost
+    [ decodeXhrAnnotate (getLink routeLink) <$> evXhrResponse
+    ]
+
+performJSONRequestWithHeadersEff
+  :: forall api r t es cfg json.
+     ( EPerform.PerformEvent t :> es, KnownTimeline es t
+     , ETrigger.TriggerEvent t :> es
      , ToJSON json
      , Configs :> es
      , HasRoute api r
@@ -223,14 +484,14 @@ performJSONRequestWithHeaders
   -> Map.Map T.Text T.Text
   -> Event t json
   -> Eff es (Event t XhrResponse)
-performJSONRequestWithHeaders proxy route headers jsonEv = do
-  routeText <- renderFullRouteBE proxy route
-  performRequestAsync $ withHeaders headers . withCred . postJson (getLink routeText) <$> jsonEv
+performJSONRequestWithHeadersEff proxy route headers jsonEv = do
+  routeText <- renderFullRouteBE @api @r @cfg @es proxy route
+  EPerform.performRequestAsync $ withHeaders headers . withCred . void . postJson (getLink routeText) <$> jsonEv
 
-performJSONRequest
-  :: forall api r t es json.
-     ( PerformEvent t :> es
-     , TriggerEvent t :> es
+performJSONRequestEff
+  :: forall api r t es cfg json.
+     ( EPerform.PerformEvent t :> es, KnownTimeline es t
+     , ETrigger.TriggerEvent t :> es
      , ToJSON json
      , Configs :> es
      , HasRoute api r
@@ -241,46 +502,10 @@ performJSONRequest
   -> r
   -> Event t json
   -> Eff es (Event t XhrResponse)
-performJSONRequest proxy route jsonEv = do
-  routeText <- renderFullRouteBE proxy route
-  performRequestAsync $ withCred <$> postJson (getLink routeText) <$> jsonEv
+performJSONRequestEff proxy route jsonEv = do
+  routeText <- renderFullRouteBE @api @r @cfg @es proxy route
+  EPerform.performRequestAsync $ withCred <$> void . postJson (getLink routeText) <$> jsonEv
 
-withCred :: XhrRequest a -> XhrRequest a
-withCred xhr = xhr & xhrRequest_config . xhrRequestConfig_withCredentials .~ True
-
-withHeaders :: Map.Map T.Text T.Text -> XhrRequest a -> XhrRequest a
-withHeaders headers xhr = xhr & xhrRequest_config . xhrRequestConfig_headers .~ headers
-
-toEith :: Maybe a -> Either T.Text a
-toEith = \case { Just a -> Right a ; Nothing -> Left "unable to parse response, please report this error" }
-
-runRequest :: (Prerender t :> es, Reflex t)
-           => Eff es (Event t r) -> Eff es (Event t r)
-runRequest req = fmap switchDyn $ prerender (pure never) req
-
-type ApiBE e a = Either (BackendError e) a
-
-fanResponse
-  :: Reflex t
-  => Event t (Either ErrorRead (Either (BackendError e) a))
-  -> (Event t ErrorRead, Event t (BackendError e), Event t a)
-fanResponse res =
-  let
-    (errRead, apiResult) = fanEither res
-    (errApi, good) = fanEither apiResult
-  in (errRead, errApi, good)
-  where fanEither = undefined -- TODO: from Reflex
-
-fanResponse'
-  :: Reflex t
-  => Event t (Either T.Text (Either (BackendError e) a))
-  -> (Event t (RequestError e), Event t a)
-fanResponse' res =
-  let
-    (errRead, apiResult) = fanEither res
-    (errApi, good) = fanEither apiResult
-    err = leftmost [ Request_ErrorAPI <$> errApi
-                   , Request_ErrorRead <$> errRead
-                   ]
-  in (err, good)
-  where fanEither = undefined -- TODO: from Reflex
+runRequestEff :: (EPre.Prerender t :> es, Reflex t, KnownTimeline es t)
+              => Eff es (Event t r) -> Eff es (Event t r)
+runRequestEff req = fmap R.switchDyn $ EPre.prerender (pure R.never) req

@@ -27,12 +27,12 @@ import Text.Email.Validate
 import qualified Data.Text.Encoding as T
 
 import Effectful (Eff, (:>), IOE)
-import Effectful.Reader.Static (Reader)
+import Effectful.Reader.Static ()
 
 
 
 createNewAccount
-  :: forall api db frontendRoute es .
+  :: forall api db cfg frontendRoute es .
      ( IOE :> es
      , Database Postgres db
      , Reader cfg :> es, HasConfig cfg CS.Key
@@ -49,26 +49,26 @@ createNewAccount
   -> frontendRoute (Signed PasswordResetToken)
   -> Eff es (Either (BackendError UserSignupError) Link)
 createNewAccount proxy email isUserType resetRoute = do
-  csk <- asksM
+  csk <- asksM @CS.Key @cfg
   (uTypeTbl :: PgTable Postgres db UserTypeTable) <- asksTableM
   (orgTbl :: PgTable Postgres db OrganizationEmails) <- asksTableM
   (acctsTbl :: PgTable Postgres db Account) <- asksTableM
   (accountsTable :: PgTable Postgres db Account) <- asksTableM
-  (withDbEnv $ ensureAccountExists' acctsTbl $ T.decodeUtf8 . toByteString $ email) >>= \case
+  (withDbEnv @cfg $ ensureAccountExists' acctsTbl $ T.decodeUtf8 . toByteString $ email) >>= \case
     (False, _) -> pure $ Left . BUserError $ AccountExists
     (True, aid) -> do
-      (withDbEnv $ putAccountRelations uTypeTbl orgTbl aid isUserType) >>= \case
+      (withDbEnv @cfg $ putAccountRelations uTypeTbl orgTbl aid isUserType) >>= \case
         Left noOrgErr -> pure . Left . BCritical $ noOrgErr
         Right () -> do
-          (withDbEnv $ newNonce accountsTable aid) >>= \case
+          (withDbEnv @cfg $ newNonce accountsTable aid) >>= \case
             Nothing -> pure $ Left . BUserError $ FailedMakeResetToken
             Just nonce -> do
-              token <- withDbEnv $ passwordResetToken csk aid nonce
-              resetLink <- renderFullRouteFE proxy $ ((resetRoute :/ token) :: R frontendRoute)
+              token <- withDbEnv @cfg $ passwordResetToken csk aid nonce
+              resetLink <- renderFullRouteFE @api @(R frontendRoute) @cfg @es proxy $ ((resetRoute :/ token) :: R frontendRoute)
               pure $ Right resetLink
 
 createNewAccountWithSetupEmail
-  :: forall api db es be n frontendRoute x.
+  :: forall api db cfg es be n frontendRoute x.
      ( IOE :> es
      , HasJsonNotifyTbl be SendEmailTask n
      , Database Postgres db
@@ -89,10 +89,10 @@ createNewAccountWithSetupEmail
   -> (Link -> MkEmail x)
   -> Eff es (Either (BackendError UserSignupError)  ())
 createNewAccountWithSetupEmail proxy email isUserType resetRoute mkEmail = do
-  (createNewAccount @api @db proxy email isUserType resetRoute) >>= (\case
+  (createNewAccount @api @db @cfg proxy email isUserType resetRoute) >>= (\case
     Left e -> pure $ Left e
     Right link_ -> do
-      x <- newMkEmailHtml @db [to] $ mkEmail link_
+      x <- newMkEmailHtml @db @cfg [to] $ mkEmail link_
       pure $ first (\_ -> BCritical NoEmailSent) x)
   where
     to = Address

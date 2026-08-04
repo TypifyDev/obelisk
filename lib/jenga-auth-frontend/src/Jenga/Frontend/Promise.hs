@@ -16,8 +16,8 @@ unsafeToPromise = UnsafeToPromise
 handlePromise :: Promise -> (JSVal -> JSM b) -> (JSVal -> JSM a) -> JSM (Either a b)
 handlePromise (UnsafeToPromise val_) thenHandler catchHandler = do
   mvar <- liftIO $ newEmptyMVar
-  nextVal <- val_ ^. js1 ("then") (fun $ \_ _ v -> thenHandler (head v) >>= liftIO . putMVar mvar . Right)
-  _ <- nextVal ^. js1 ("catch") (fun $ \_ _ err -> catchHandler (head err) >>= liftIO . putMVar mvar . Left)
+  nextVal <- val_ ^. js1 ("then" :: JSString) (fun $ \_ _ v -> case v of { (x:_) -> thenHandler x >>= liftIO . putMVar mvar . Right ; [] -> pure () })
+  _ <- nextVal ^. js1 ("catch" :: JSString) (fun $ \_ _ err -> case err of { (x:_) -> catchHandler x >>= liftIO . putMVar mvar . Left ; [] -> pure () })
   liftIO $ takeMVar mvar
 
 promiseMaybe :: Promise -> (JSVal -> JSM a) -> JSM (Maybe a)

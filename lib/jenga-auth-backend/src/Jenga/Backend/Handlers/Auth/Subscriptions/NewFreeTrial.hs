@@ -15,7 +15,7 @@ import Database.Beam.Schema
 import Rhyolite.Account
 import Jenga.Route
 
-import Control.Monad.IO.Class
+import Control.Monad.IO.Class ()
 import Data.Signed
 import Data.Pool
 import Web.ClientSession as CS
@@ -24,12 +24,12 @@ import qualified Data.Text as T
 import qualified Data.Text.Encoding as T
 
 import Effectful (Eff, (:>), IOE)
-import Effectful.Reader.Static (Reader)
+import Effectful.Reader.Static ()
 
 
 
 newFreeTrialHandler
-  :: forall api db be es n frontendRoute x.
+  :: forall api db cfg be es n frontendRoute x.
      ( IOE :> es
      --, EmailM es db n be
      , HasJsonNotifyTbl be SendEmailTask n
@@ -56,11 +56,11 @@ newFreeTrialHandler proxy (mCode,email) resetRoute mkEmail = do
   case validate . T.encodeUtf8 . unEmail $ email of
     Left _ -> pure $ Left . BUserError $ InvalidEmail_FreeTrial
     Right validatedEmail -> do
-      createNewAccountWithSetupEmail @api @db proxy validatedEmail IsSelf resetRoute mkEmail >>= \case
+      createNewAccountWithSetupEmail @api @db @cfg proxy validatedEmail IsSelf resetRoute mkEmail >>= \case
         Left e -> pure $ Left $ FreeTrial_Signup <$> e
         Right () -> do
-          (withDbEnv $ getUserByEmail acctsTbl $ unEmail email) >>= \case
+          (withDbEnv @cfg $ getUserByEmail acctsTbl $ unEmail email) >>= \case
             Nothing -> pure $ Left . BCritical $ NoUserForFreeTrial-- "Error creating user: on get user: not found"
             Just user -> do
-              withDbEnv $ putNewFreeTrial freeTrialTbl (pk user) mCode
+              withDbEnv @cfg $ putNewFreeTrial freeTrialTbl (pk user) mCode
               pure $ Right ()

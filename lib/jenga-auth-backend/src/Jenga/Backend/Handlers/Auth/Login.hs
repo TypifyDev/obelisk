@@ -33,12 +33,12 @@ import Data.Signed
 import qualified Data.Text as T
 
 import Effectful (Eff, (:>), IOE)
-import Effectful.Reader.Static (Reader)
+import Effectful.Reader.Static ()
 
 
 -- | Note that the login function from rhyolite really just returns the ID
 loginHandler
-  :: forall db es.
+  :: forall db cfg es.
      ( IOE :> es
      , Database Postgres db
      , Reader cfg :> es, HasConfig cfg DomainOption
@@ -51,18 +51,18 @@ loginHandler
   => (T.Text, Password)
   -> Eff es (Either (BackendError LoginError) (Signed (Id Account), UserType, Snap.Snap ()))
 loginHandler (email, Password pass) = do
-  tryLogin @db (email, Password pass) >>= \case
+  tryLogin @db @cfg (email, Password pass) >>= \case
     Left bError -> pure $ Left bError
     Right (usersAccountId, userType) -> do
-      csk <- asksM
-      authCookieName <- getAuthCookieName <$> asksM
+      csk <- asksM @Key @cfg
+      authCookieName <- getAuthCookieName <$> asksM @AuthCookieName @cfg
       signedTokenUserID_  <- liftIO $ signWithKey csk usersAccountId
-      domainOpts <- asksM
+      domainOpts <- asksM @DomainOption @cfg
       pure $ Right (signedTokenUserID_, userType, addAuthCookieHeader csk domainOpts authCookieName usersAccountId)
 
 -- | If we are using websockets, this is all we need
 tryLogin
-  :: forall db es.
+  :: forall db cfg es.
      ( IOE :> es
      , Database Postgres db
      , Reader cfg :> es, HasConfig cfg (Pool Connection)
@@ -77,15 +77,15 @@ tryLogin
 tryLogin (email, Password pass) = do
   (acctsTbl :: PgTable Postgres db Account) <- asksTableM
   (uTypeTbl :: PgTable Postgres db UserTypeTable) <- asksTableM
-  mAcct <- withDbEnv $ getUserByEmail acctsTbl email
+  mAcct <- withDbEnv @cfg $ getUserByEmail acctsTbl email
   case mAcct of
     Nothing -> pure . Left . BUserError $ UnrecognizedEmail email
     Just acctRow@(Rhyolite.Account.Account _ userEmail _ _) -> do
-      loginResult <- withDbEnv $ login acctsTbl (T.toLower userEmail) pass
+      loginResult <- withDbEnv @cfg $ login acctsTbl (T.toLower userEmail) pass
       case loginResult of
         Nothing -> pure . Left . BUserError $ IncorrectPassword
         Just usersAccountId -> do
-          userType' <- withDbEnv $ getUserType uTypeTbl $ pk acctRow--aid
+          userType' <- withDbEnv @cfg $ getUserType uTypeTbl $ pk acctRow--aid
           case userType' of
             Nothing -> pure . Left . BCritical $ NoUserTypeFound
             Just uType -> do

@@ -9,7 +9,7 @@
 -- Compare with the MTL version in skeleton/frontend/src/Frontend.hs.
 module JengaSkeleton where
 
-import           Reflex.Effectful.Jenga
+import           Jenga.Frontend.Effectful
 
 -- Simulated route type (would come from Common.Route in a real project)
 data FrontendRoute a where

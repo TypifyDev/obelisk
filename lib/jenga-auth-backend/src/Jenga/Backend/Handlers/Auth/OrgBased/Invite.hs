@@ -19,7 +19,7 @@ import Database.Beam.Query
 
 import Web.ClientSession as CS
 import Data.Pool
-import Control.Monad.IO.Class
+import Control.Monad.IO.Class ()
 import Data.Signed
 import Data.Bifunctor
 import Data.Maybe
@@ -27,10 +27,10 @@ import Text.Email.Validate as EmailValidate
 import qualified Data.Text as T
 
 import Effectful (Eff, (:>), IOE)
-import Effectful.Reader.Static (Reader)
+import Effectful.Reader.Static ()
 
 inviteHandler
-  :: forall api db be frontendRoute es x n.
+  :: forall api db cfg be frontendRoute es x n.
      ( IOE :> es
      , Database Postgres db
      , Reader cfg :> es, HasConfig cfg CS.Key
@@ -53,8 +53,8 @@ inviteHandler
   -> Eff es (Either (BackendError InviteError) ())
 inviteHandler proxy email inviter resetRoute mkBody = do
   (acctTbl :: PgTable Postgres db Account) <- asksTableM
-  user <- (fmap.fmap) _account_email $ withDbEnv $ runSelectReturningOne $ lookup_ acctTbl inviter
-  signupRes <- userSignupHandler @api @db
+  user <- (fmap.fmap) _account_email $ withDbEnv @cfg $ runSelectReturningOne $ lookup_ acctTbl inviter
+  signupRes <- userSignupHandler @api @db @cfg
     proxy
     email
     resetRoute

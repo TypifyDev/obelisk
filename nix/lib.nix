@@ -37,7 +37,7 @@ let src = ../.;
         name = "nix-thunk";
         src = nix-thunk-src;
       };
-      compiler-nix-name = "ghc914";
+      compiler-nix-name = "ghc9122";
       cabalProjectLocal = ''
         allow-newer:
             *:base

@@ -21,10 +21,10 @@ import Text.Email.Validate
 import qualified Data.Text.Encoding as T
 
 import Effectful (Eff, (:>), IOE)
-import Effectful.Reader.Static (Reader)
+import Effectful.Reader.Static ()
 
 adminSignupHandler
-  :: forall api db frontendRoute es x n.
+  :: forall api db cfg frontendRoute es x n.
      ( IOE :> es
      , Database Postgres db
      , Reader cfg :> es, HasConfig cfg CS.Key
@@ -45,10 +45,10 @@ adminSignupHandler
   -> (Link -> MkEmail x)
   -> Eff es (Either (BackendError AdminSignupError) ())
 adminSignupHandler proxy (NewCompanyEmail email orgName code) resetRoute mkEmail = do
-  matchesCompanyCodeEnv code >>= \case
+  matchesCompanyCodeEnv @cfg code >>= \case
     False -> pure $ Left . BUserError $ InvalidAdminCode
     True -> do
-      createNewAccount @api @db proxy email (IsCompany orgName) resetRoute >>= \case
+      createNewAccount @api @db @cfg proxy email (IsCompany orgName) resetRoute >>= \case
         Left beErr -> pure $ Left $ fmap AdminSignupError $ beErr
         Right link -> do
           let
@@ -56,7 +56,7 @@ adminSignupHandler proxy (NewCompanyEmail email orgName code) resetRoute mkEmail
                  { addressName = Nothing
                  , addressEmail = T.decodeUtf8 . toByteString $ email
                  } -- recipients Address
-          eRes <- newMkEmailHtml @db [to] $ mkEmail link
+          eRes <- newMkEmailHtml @db @cfg [to] $ mkEmail link
           case eRes of
             Left _ -> pure $ Left . BCritical . AdminSignupError $ NoEmailSent
             Right () -> do

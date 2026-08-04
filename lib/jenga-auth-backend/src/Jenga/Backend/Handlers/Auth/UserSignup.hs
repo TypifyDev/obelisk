@@ -22,7 +22,7 @@ import Text.Email.Validate as EmailValidate
 import qualified Data.Text.Encoding as T
 
 import Effectful (Eff, (:>), IOE)
-import Effectful.Reader.Static (Reader)
+import Effectful.Reader.Static ()
 
 -- userSignup
 --   :: MonadIO m
@@ -40,7 +40,7 @@ import Effectful.Reader.Static (Reader)
 
 --let mkBody = body <> "\n" <> link -- plaintext emali
 userSignupHandler
-  :: forall api db be frontendRoute es x n.
+  :: forall api db cfg be frontendRoute es x n.
      ( IOE :> es
      , Database Postgres db
      , Reader cfg :> es, HasConfig cfg CS.Key
@@ -63,7 +63,7 @@ userSignupHandler proxy email resetRoute mkBody = do
   case EmailValidate.emailAddress (EmailValidate.toByteString email) of
     Nothing -> pure . Left . BUserError $ BadSignupEmail
     Just emailParsed -> do
-      createNewAccount @api @db proxy (emailParsed) IsSelf resetRoute >>= \case
+      createNewAccount @api @db @cfg proxy (emailParsed) IsSelf resetRoute >>= \case
         Left e -> pure $ Left e
         Right link -> do
           let
@@ -71,5 +71,5 @@ userSignupHandler proxy email resetRoute mkBody = do
               { addressName = Nothing
               , addressEmail = T.decodeUtf8 . toByteString $ email
               }
-          x <- newMkEmailHtml @db [to] $ mkBody link
+          x <- newMkEmailHtml @db @cfg [to] $ mkBody link
           pure $ first (\_ -> BCritical NoEmailSent) x

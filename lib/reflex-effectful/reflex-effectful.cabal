@@ -26,10 +26,12 @@ library
     Reflex.Effectful.Effect.BehaviorWriter
     Reflex.Effectful.Effect.Requester
     Reflex.Effectful.Run
-    Reflex.Effectful.Jenga
-    Reflex.Effectful.Effect.Jenga.Configs
-    Reflex.Effectful.Effect.Jenga.Cookies
-    Reflex.Effectful.Effect.Jenga.Route
+    -- Jenga-specific effect wrappers moved to jenga-frontend:
+    --   Reflex.Effectful.Jenga                    -> Jenga.Frontend.Effectful
+    --   Reflex.Effectful.Effect.Jenga.Configs     -> Jenga.Frontend.Effectful.Configs
+    --   Reflex.Effectful.Effect.Jenga.Cookies     -> Jenga.Frontend.Effectful.Cookies
+    --   Reflex.Effectful.Effect.Jenga.Route       -> Jenga.Frontend.Effectful.Route
+    -- reflex-effectful is library-agnostic; those wrappers belong with jenga.
 
   other-modules:
     Reflex.Effectful.Internal.Channel
@@ -72,26 +74,3 @@ library
     TypeFamilies
     TypeOperators
 
-executable counter-example
-  main-is:          Counter.hs
-  hs-source-dirs:   examples
-  build-depends:
-    , base
-    , containers
-    , data-default
-    , jsaddle
-    , jsaddle-warp
-    , lens
-    , reflex
-    , reflex-dom-core
-    , reflex-effectful
-    , text
-  default-language:  Haskell2010
-  ghc-options:       -threaded
-  default-extensions:
-    DataKinds
-    FlexibleContexts
-    OverloadedStrings
-    TypeOperators
-  if arch(javascript) || arch(wasm32)
-    buildable: False

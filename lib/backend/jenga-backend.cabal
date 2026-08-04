@@ -1,6 +1,6 @@
+cabal-version: 2.0
 name: jenga-backend
 version: 0.1
-cabal-version: >= 1.2
 build-type: Simple
 
 library

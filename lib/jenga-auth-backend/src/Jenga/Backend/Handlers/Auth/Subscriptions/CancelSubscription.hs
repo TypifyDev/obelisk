@@ -17,17 +17,17 @@ import Database.Beam.Postgres
 import Rhyolite.Account
 
 import Data.Pool
-import Control.Monad.IO.Class
+import Control.Monad.IO.Class ()
 
 import Web.Stripe
 import Web.Stripe.Customer
 import Web.Stripe.Subscription
 
 import Effectful (Eff, (:>), IOE)
-import Effectful.Reader.Static (Reader)
+import Effectful.Reader.Static ()
 
 cancelSubscriptionHandler
-  :: forall db es.
+  :: forall db cfg es.
      ( IOE :> es
      , Database Postgres db
      , Reader cfg :> es, HasConfig cfg StripeConfig
@@ -38,16 +38,16 @@ cancelSubscriptionHandler
   => Id Account
   -> Eff es (Either (BackendError CancelSubError) ())
 cancelSubscriptionHandler acctID = do
-  stripeConfig <- asksM -- Cfg _stripeConfig
+  stripeConfig <- asksM @StripeConfig @cfg
 
   (stripeTbl :: PgTable Postgres db StripeRelation) <- asksTableM
   (acctTbl :: PgTable Postgres db Account) <- asksTableM
 
   let stripe' = liftIO . stripe stripeConfig
-  maybeStripeRelation <- withDbEnv $ getStripeInfo stripeTbl acctID
+  maybeStripeRelation <- withDbEnv @cfg $ getStripeInfo stripeTbl acctID
   case maybeStripeRelation of
     Nothing -> do
-      mEmail <- withDbEnv $ getUsersEmail acctTbl acctID
+      mEmail <- withDbEnv @cfg $ getUsersEmail acctTbl acctID
       case mEmail of
         Nothing -> pure $ Left . BCritical $ NoSubOrAccount
         Just _email -> do
@@ -63,7 +63,7 @@ cancelSubscriptionHandler acctID = do
           case eithCancelSub of
             Left e -> pure . Left . BCritical . StripeCouldntCancel $ e
             Right _ -> do
-              withDbEnv $ recordEndSubscription stripeTbl acctID
+              withDbEnv @cfg $ recordEndSubscription stripeTbl acctID
               pure $ Right ()
 
   -- get stripe customer id AND subscription id based on acct id
