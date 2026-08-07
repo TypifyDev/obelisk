@@ -1,0 +1,7 @@
+dist-newstyle/
+effectful-core-*/
+*.hi
+*.o
+*.dyn_hi
+*.dyn_o
+.ghc.environment.*

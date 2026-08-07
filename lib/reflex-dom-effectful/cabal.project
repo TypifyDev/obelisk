@@ -1,0 +1,8 @@
+packages: .
+
+-- effectful-core comes from hackage, everything else from nix
+package reflex
+  ghc-options: -fno-code
+
+package reflex-dom-core
+  ghc-options: -fno-code

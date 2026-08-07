@@ -1,71 +1,619 @@
 cabal-version:      3.0
 name:               reflex-effectful
 version:            0.1.0.0
-synopsis:           Effectful-based interface for reflex-dom
+synopsis:           Effectful-based interface for reflex (headless, no DOM)
 license:            BSD-3-Clause
 build-type:         Simple
 
 library
   exposed-modules:
-    Reflex.Effectful
     Reflex.Effectful.Types
     Reflex.Effectful.Effect.Sample
     Reflex.Effectful.Effect.Hold
     Reflex.Effectful.Effect.PostBuild
     Reflex.Effectful.Effect.TriggerEvent
     Reflex.Effectful.Effect.PerformEvent
-    Reflex.Effectful.Effect.Adjustable
-    Reflex.Effectful.Effect.Dom
-    Reflex.Effectful.Effect.Prerender
-    Reflex.Effectful.Effect.JSM
-    Reflex.Effectful.Effect.HasDocument
-    Reflex.Effectful.Effect.DomRenderHook
     Reflex.Effectful.Effect.EventWriter
     Reflex.Effectful.Effect.NotReady
     Reflex.Effectful.Effect.DynamicWriter
     Reflex.Effectful.Effect.BehaviorWriter
     Reflex.Effectful.Effect.Requester
-    Reflex.Effectful.Run
-    -- Jenga-specific effect wrappers moved to jenga-frontend:
-    --   Reflex.Effectful.Jenga                    -> Jenga.Frontend.Effectful
-    --   Reflex.Effectful.Effect.Jenga.Configs     -> Jenga.Frontend.Effectful.Configs
-    --   Reflex.Effectful.Effect.Jenga.Cookies     -> Jenga.Frontend.Effectful.Cookies
-    --   Reflex.Effectful.Effect.Jenga.Route       -> Jenga.Frontend.Effectful.Route
-    -- reflex-effectful is library-agnostic; those wrappers belong with jenga.
-
-  other-modules:
-    Reflex.Effectful.Internal.Channel
-    Reflex.Effectful.Internal.Interpret
-    Reflex.Effectful.Internal.WidgetLoop
+    Reflex.Effectful.Effect.Query
+    -- MVP: native FRP engine (own types + primitives; no reflex dep)
+    Reflex.Effectful.Core.Types
+    Reflex.Effectful.Core.Timeline
+    Reflex.Effectful.Core.Monads.EventME
+    Reflex.Effectful.Core.Monads.BehaviorME
+    Reflex.Effectful.Core.Monads.PushME
+    Reflex.Effectful.Core.Monads.PullME
+    Reflex.Effectful.Core.Monads.ReadPhaseE
+    Reflex.Effectful.Core.Primitives
+    Reflex.Effectful.Core.Primitives.Pull
+    Reflex.Effectful.Core.Primitives.Fan
+    Reflex.Effectful.Core.Primitives.Incremental
+    Reflex.Effectful.Core.Primitives.Merge
+    Reflex.Effectful.Core.Primitives.Switch
+    Reflex.Effectful.Core.Primitives.Coincidence
+    Reflex.Effectful.Core.Primitives.Adjust
+    Reflex.Effectful.Core.Experimental.CachedBehavior
+    Reflex.Effectful.Core.Experimental.FrameHeight
+    Reflex.Effectful.Core.Experimental.WeakSubs
+    Reflex.Effectful.Core.Scheduler
+    Reflex.Effectful.Core.DynamicInstances
+    Reflex.Effectful.Core.Class
+    Reflex.Effectful.Core.Profiled
+    Reflex.Effectful.Core.Pure
+    Reflex.Effectful.Core.Class.TriggerEvent
+    Reflex.Effectful.Core.Class.PostBuild
+    Reflex.Effectful.Core.Class.Adjustable
+    Reflex.Effectful.Core.Class.PerformEvent
+    Reflex.Effectful.Core.Time
+    Reflex.Effectful.Core.Primitives.FanInt
+    Reflex.Effectful.Core.Requester
+    Reflex.Effectful.Core.Trace
+    -- Ports from upstream reflex (namespaced to avoid module collision)
+    Reflex.Effectful.Data.Functor.Misc
+    Reflex.Effectful.Data.Map.Misc
+    Reflex.Effectful.Data.AppendMap
+    Reflex.Effectful.Data.FastMutableIntMap
+    Reflex.Effectful.Data.WeakBag
+    Reflex.Effectful.Data.FastWeakBag
+    Reflex.Effectful.Control.Monad.ReaderIO
+    Reflex.Effectful.FunctorMaybe
+    Reflex.Effectful.FastWeak
+    Reflex.Effectful.Dynamic.Uniq
+    Reflex.Effectful.Dynamic.TH
+    Reflex.Effectful.Host.Headless
+    Reflex.Effectful.Network
+    Reflex.Effectful.Collection
+    Reflex.Effectful.Workflow
     Reflex.Effectful.Internal.Main
+    -- Ports of the 11 reflex class modules (Phase 1 of dropping the
+    -- `reflex` build-dep). Verbatim copies from upstream with only the
+    -- module header + intra-set imports renamed. Consumer code / our
+    -- own instances still target the upstream `reflex` classes; those
+    -- get swapped over to these ports in Phases 2-4.
+    Reflex.Effectful.Class
+    Reflex.Effectful.Class.Adjustable.Class
+    Reflex.Effectful.Class.PostBuild.Class
+    Reflex.Effectful.Class.PerformEvent.Class
+    Reflex.Effectful.Class.TriggerEvent.Class
+    Reflex.Effectful.Class.NotReady.Class
+    Reflex.Effectful.Class.Requester.Class
+    Reflex.Effectful.Class.Query.Class
+    Reflex.Effectful.Class.EventWriter.Class
+    Reflex.Effectful.Class.DynamicWriter.Class
+    Reflex.Effectful.Class.BehaviorWriter.Class
 
   build-depends:
     , base            >=4.12 && <5
-    , bytestring
+    , commutative-semigroups
+    , constraints
     , containers
     , data-default
     , dependent-map
     , dependent-sum
     , effectful-core   >=2.3
-    , ghcjs-dom
-    , jsaddle
-    , lens
+    , exceptions
+    , haskell-src-exts
+    , haskell-src-meta
+    , MemoTrie
+    , monoidal-containers
+    , mtl
     , patch
+    , primitive
+    , ref-tf
+    , reflection
     , reflex
-    , reflex-dom-core
+    , semialign
+    , semigroupoids
+    , transformers
+    , some
+    , syb
+    , template-haskell
     , text
+    , these
     , time
+    , witherable
 
   hs-source-dirs:   src
   default-language: GHC2024
   ghc-options:       -Wall
 
   default-extensions:
+    DataKinds
+    FlexibleContexts
     FunctionalDependencies
+    GADTs
+    LambdaCase
     OverloadedStrings
     QuasiQuotes
     RecordWildCards
     RecursiveDo
-    TemplateHaskell
+    ScopedTypeVariables
+    TypeApplications
     TypeFamilies
+    TypeOperators
+    UndecidableInstances
 
+test-suite core-engine-smoke
+  type:               exitcode-stdio-1.0
+  main-is:            CoreEngineSmoke.hs
+  hs-source-dirs:     test
+  build-depends:
+    , base
+    , reflex-effectful
+  default-language:   GHC2024
+  default-extensions: TypeApplications
+  ghc-options:        -Wall
+
+test-suite pull-smoke
+  type:               exitcode-stdio-1.0
+  main-is:            PullSmoke.hs
+  hs-source-dirs:     test
+  build-depends:
+    , base
+    , reflex-effectful
+  default-language:   GHC2024
+  default-extensions: TypeApplications
+  ghc-options:        -Wall
+
+test-suite fan-smoke
+  type:               exitcode-stdio-1.0
+  main-is:            FanSmoke.hs
+  hs-source-dirs:     test
+  build-depends:
+    , base
+    , containers
+    , reflex-effectful
+  default-language:   GHC2024
+  default-extensions: TypeApplications
+  ghc-options:        -Wall
+
+test-suite incremental-smoke
+  type:               exitcode-stdio-1.0
+  main-is:            IncrementalSmoke.hs
+  hs-source-dirs:     test
+  build-depends:
+    , base
+    , containers
+    , patch
+    , reflex-effectful
+  default-language:   GHC2024
+  default-extensions: TypeApplications
+  ghc-options:        -Wall
+
+test-suite merge-smoke
+  type:               exitcode-stdio-1.0
+  main-is:            MergeSmoke.hs
+  hs-source-dirs:     test
+  build-depends:
+    , base
+    , containers
+    , reflex-effectful
+  default-language:   GHC2024
+  default-extensions: TypeApplications
+  ghc-options:        -Wall
+
+test-suite switch-smoke
+  type:               exitcode-stdio-1.0
+  main-is:            SwitchSmoke.hs
+  hs-source-dirs:     test
+  build-depends:
+    , base
+    , reflex-effectful
+  default-language:   GHC2024
+  default-extensions: TypeApplications
+  ghc-options:        -Wall
+
+test-suite switch-extended-smoke
+  type:               exitcode-stdio-1.0
+  main-is:            SwitchExtendedSmoke.hs
+  hs-source-dirs:     test
+  build-depends:
+    , base
+    , reflex-effectful
+  default-language:   GHC2024
+  default-extensions: TypeApplications
+  ghc-options:        -Wall
+
+test-suite coincidence-smoke
+  type:               exitcode-stdio-1.0
+  main-is:            CoincidenceSmoke.hs
+  hs-source-dirs:     test
+  build-depends:
+    , base
+    , reflex-effectful
+  default-language:   GHC2024
+  default-extensions: TypeApplications
+  ghc-options:        -Wall
+
+test-suite coincidence-positive-smoke
+  type:               exitcode-stdio-1.0
+  main-is:            CoincidencePositiveSmoke.hs
+  hs-source-dirs:     test
+  build-depends:
+    , base
+    , reflex-effectful
+  default-language:   GHC2024
+  default-extensions: TypeApplications
+  ghc-options:        -Wall
+
+test-suite cached-behavior-smoke
+  type:               exitcode-stdio-1.0
+  main-is:            CachedBehaviorSmoke.hs
+  hs-source-dirs:     test
+  build-depends:
+    , base
+    , reflex-effectful
+  default-language:   GHC2024
+  default-extensions: TypeApplications
+  ghc-options:        -Wall
+
+test-suite frameheight-smoke
+  type:               exitcode-stdio-1.0
+  main-is:            FrameHeightSmoke.hs
+  hs-source-dirs:     test
+  build-depends:
+    , base
+    , reflex-effectful
+  default-language:   GHC2024
+  ghc-options:        -Wall
+
+test-suite diamond-scheduler-smoke
+  type:               exitcode-stdio-1.0
+  main-is:            DiamondSchedulerSmoke.hs
+  hs-source-dirs:     test
+  build-depends:
+    , base
+    , reflex-effectful
+  default-language:   GHC2024
+  ghc-options:        -Wall
+
+test-suite reflex-class-instance-smoke
+  type:               exitcode-stdio-1.0
+  main-is:            ReflexClassInstanceSmoke.hs
+  hs-source-dirs:     test
+  build-depends:
+    , base
+    , reflex
+    , reflex-effectful
+  default-language:   GHC2024
+  default-extensions: TypeApplications
+  ghc-options:        -Wall
+
+test-suite triggerevent-instance-smoke
+  type:               exitcode-stdio-1.0
+  main-is:            TriggerEventInstanceSmoke.hs
+  hs-source-dirs:     test
+  build-depends:
+    , base
+    , reflex
+    , reflex-effectful
+    , effectful-core
+  default-language:   GHC2024
+  default-extensions: TypeApplications
+  ghc-options:        -Wall
+
+test-suite weaksubs-smoke
+  type:               exitcode-stdio-1.0
+  main-is:            WeakSubsSmoke.hs
+  hs-source-dirs:     test
+  build-depends:
+    , base
+    , reflex-effectful
+  default-language:   GHC2024
+  default-extensions: TypeApplications
+  ghc-options:        -Wall
+
+test-suite weakbag-subscribe-smoke
+  type:               exitcode-stdio-1.0
+  main-is:            WeakBagSubscribeSmoke.hs
+  hs-source-dirs:     test
+  build-depends:
+    , base
+    , reflex-effectful
+  default-language:   GHC2024
+  default-extensions: TypeApplications
+  ghc-options:        -Wall
+
+test-suite postbuild-instance-smoke
+  type:               exitcode-stdio-1.0
+  main-is:            PostBuildInstanceSmoke.hs
+  hs-source-dirs:     test
+  build-depends:
+    , base
+    , effectful-core
+    , reflex
+    , reflex-effectful
+  default-language:   GHC2024
+  default-extensions: TypeApplications
+  ghc-options:        -Wall
+
+test-suite dynamicwriter-interpreter-smoke
+  type:               exitcode-stdio-1.0
+  main-is:            DynamicWriterInterpreterSmoke.hs
+  hs-source-dirs:     test
+  build-depends:
+    , base
+    , effectful-core
+    , reflex
+    , reflex-effectful
+  default-language:   GHC2024
+  default-extensions: TypeApplications
+  ghc-options:        -Wall
+
+test-suite performevent-instance-smoke
+  type:               exitcode-stdio-1.0
+  main-is:            PerformEventInstanceSmoke.hs
+  hs-source-dirs:     test
+  build-depends:
+    , base
+    , effectful-core
+    , reflex
+    , reflex-effectful
+  default-language:   GHC2024
+  default-extensions: TypeApplications
+  ghc-options:        -Wall
+
+test-suite integration-smoke
+  type:               exitcode-stdio-1.0
+  main-is:            IntegrationSmoke.hs
+  hs-source-dirs:     test
+  build-depends:
+    , base
+    , reflex-effectful
+  default-language:   GHC2024
+  default-extensions: TypeApplications
+  ghc-options:        -Wall
+
+test-suite host-class-smoke
+  type:               exitcode-stdio-1.0
+  main-is:            HostClassSmoke.hs
+  hs-source-dirs:     test
+  build-depends:
+    , base
+    , dependent-sum
+    , reflex
+    , reflex-effectful
+  default-language:   GHC2024
+  default-extensions: TypeApplications
+  ghc-options:        -Wall
+
+test-suite efftimeline-host-smoke
+  type:               exitcode-stdio-1.0
+  main-is:            EffTimelineHostSmoke.hs
+  hs-source-dirs:     test
+  build-depends:
+    , base
+    , reflex-effectful
+  default-language:   GHC2024
+  default-extensions: TypeApplications
+  ghc-options:        -Wall
+
+test-suite native-query-smoke
+  type:               exitcode-stdio-1.0
+  main-is:            NativeQuerySmoke.hs
+  hs-source-dirs:     test
+  build-depends:
+    , base
+    , commutative-semigroups
+    , effectful-core
+    , reflex
+    , reflex-effectful
+  default-language:   GHC2024
+  default-extensions: TypeApplications
+  ghc-options:        -Wall
+
+test-suite pure-smoke
+  type:               exitcode-stdio-1.0
+  main-is:            PureSmoke.hs
+  hs-source-dirs:     test
+  build-depends:
+    , base
+    , reflex
+    , reflex-effectful
+  default-language:   GHC2024
+  default-extensions: TypeApplications
+  ghc-options:        -Wall
+
+test-suite native-postbuild-smoke
+  type:               exitcode-stdio-1.0
+  main-is:            NativePostBuildSmoke.hs
+  hs-source-dirs:     test
+  build-depends:
+    , base
+    , effectful-core
+    , reflex-effectful
+  default-language:   GHC2024
+  default-extensions: TypeApplications
+  ghc-options:        -Wall
+
+test-suite profiled-smoke
+  type:               exitcode-stdio-1.0
+  main-is:            ProfiledSmoke.hs
+  hs-source-dirs:     test
+  build-depends:
+    , base
+    , reflex
+    , reflex-effectful
+  default-language:   GHC2024
+  default-extensions: TypeApplications
+  ghc-options:        -Wall
+
+test-suite trace-smoke
+  type:               exitcode-stdio-1.0
+  main-is:            TraceSmoke.hs
+  hs-source-dirs:     test
+  build-depends:
+    , base
+    , reflex-effectful
+  default-language:   GHC2024
+  default-extensions: TypeApplications
+  ghc-options:        -Wall
+
+test-suite native-monadfix-smoke
+  type:               exitcode-stdio-1.0
+  main-is:            NativeMonadFixSmoke.hs
+  hs-source-dirs:     test
+  build-depends:
+    , base
+    , reflex-effectful
+  default-language:   GHC2024
+  default-extensions: TypeApplications
+  ghc-options:        -Wall
+
+test-suite data-functor-misc-smoke
+  type:               exitcode-stdio-1.0
+  main-is:            DataFunctorMiscSmoke.hs
+  hs-source-dirs:     test
+  build-depends:      , base, reflex-effectful, containers, some, these, dependent-map, dependent-sum
+  default-language:   GHC2024
+  ghc-options:        -Wall
+
+test-suite functor-maybe-smoke
+  type:               exitcode-stdio-1.0
+  main-is:            FunctorMaybeSmoke.hs
+  hs-source-dirs:     test
+  build-depends:      , base, reflex-effectful, containers, witherable
+  default-language:   GHC2024
+  ghc-options:        -Wall
+
+test-suite fast-weak-smoke
+  type:               exitcode-stdio-1.0
+  main-is:            FastWeakSmoke.hs
+  hs-source-dirs:     test
+  build-depends:      , base, reflex-effectful
+  default-language:   GHC2024
+  ghc-options:        -Wall
+
+test-suite data-map-misc-smoke
+  type:               exitcode-stdio-1.0
+  main-is:            DataMapMiscSmoke.hs
+  hs-source-dirs:     test
+  build-depends:      , base, reflex-effectful, containers, semialign, these
+  default-language:   GHC2024
+  ghc-options:        -Wall
+
+test-suite data-appendmap-smoke
+  type:               exitcode-stdio-1.0
+  main-is:            DataAppendMapSmoke.hs
+  hs-source-dirs:     test
+  build-depends:      , base, reflex-effectful, containers, monoidal-containers, data-default
+  default-language:   GHC2024
+  ghc-options:        -Wall
+
+test-suite reader-io-smoke
+  type:               exitcode-stdio-1.0
+  main-is:            ReaderIOSmoke.hs
+  hs-source-dirs:     test
+  build-depends:      , base, reflex-effectful, mtl
+  default-language:   GHC2024
+  ghc-options:        -Wall
+
+test-suite fast-mutable-intmap-smoke
+  type:               exitcode-stdio-1.0
+  main-is:            FastMutableIntMapSmoke.hs
+  hs-source-dirs:     test
+  build-depends:      , base, reflex-effectful, containers, patch
+  default-language:   GHC2024
+  ghc-options:        -Wall
+
+test-suite weak-bag-smoke
+  type:               exitcode-stdio-1.0
+  main-is:            WeakBagSmoke.hs
+  hs-source-dirs:     test
+  build-depends:      , base, reflex-effectful, containers
+  default-language:   GHC2024
+  ghc-options:        -Wall
+
+test-suite fast-weak-bag-smoke
+  type:               exitcode-stdio-1.0
+  main-is:            FastWeakBagSmoke.hs
+  hs-source-dirs:     test
+  build-depends:      , base, reflex-effectful, containers
+  default-language:   GHC2024
+  ghc-options:        -Wall
+
+test-suite dynamic-uniq-smoke
+  type:               exitcode-stdio-1.0
+  main-is:            DynamicUniqSmoke.hs
+  hs-source-dirs:     test
+  build-depends:      , base, reflex-effectful, reflex
+  default-language:   GHC2024
+  default-extensions: TypeApplications
+  ghc-options:        -Wall
+
+test-suite host-headless-smoke
+  type:               exitcode-stdio-1.0
+  main-is:            HostHeadlessSmoke.hs
+  hs-source-dirs:     test
+  build-depends:      , base, reflex-effectful, reflex, ref-tf, primitive, dependent-sum
+  default-language:   GHC2024
+  ghc-options:        -Wall
+
+test-suite dynamic-th-smoke
+  type:               exitcode-stdio-1.0
+  main-is:            DynamicTHSmoke.hs
+  hs-source-dirs:     test
+  build-depends:      , base, reflex-effectful, reflex, template-haskell
+  default-language:   GHC2024
+  default-extensions: TemplateHaskell
+  ghc-options:        -Wall
+
+test-suite network-smoke
+  type:               exitcode-stdio-1.0
+  main-is:            NetworkSmoke.hs
+  hs-source-dirs:     test
+  build-depends:      , base, reflex-effectful, reflex
+  default-language:   GHC2024
+  ghc-options:        -Wall
+
+test-suite collection-smoke
+  type:               exitcode-stdio-1.0
+  main-is:            CollectionSmoke.hs
+  hs-source-dirs:     test
+  build-depends:      , base, reflex-effectful, reflex, containers
+  default-language:   GHC2024
+  ghc-options:        -Wall
+
+test-suite native-adjustable-smoke
+  type:               exitcode-stdio-1.0
+  main-is:            NativeAdjustableSmoke.hs
+  hs-source-dirs:     test
+  build-depends:
+    , base
+    , containers
+    , dependent-map
+    , dependent-sum
+    , patch
+    , reflex-effectful
+  default-language:   GHC2024
+  default-extensions: TypeApplications
+  ghc-options:        -Wall
+
+test-suite workflow-smoke
+  type:               exitcode-stdio-1.0
+  main-is:            WorkflowSmoke.hs
+  hs-source-dirs:     test
+  build-depends:      , base, reflex-effectful, reflex
+  default-language:   GHC2024
+  ghc-options:        -Wall
+
+test-suite run-main-widget-smoke
+  type:               exitcode-stdio-1.0
+  main-is:            RunMainWidgetSmoke.hs
+  hs-source-dirs:     test
+  build-depends:      , base, reflex-effectful, effectful-core
+  default-language:   GHC2024
+  default-extensions: TypeApplications, NumericUnderscores
+  ghc-options:        -Wall
+
+test-suite property-primitives
+  type:               exitcode-stdio-1.0
+  main-is:            PropertyPrimitives.hs
+  hs-source-dirs:     test
+  build-depends:      , base, reflex-effectful, QuickCheck, containers
+  default-language:   GHC2024
+  default-extensions: TypeApplications
+  ghc-options:        -Wall
