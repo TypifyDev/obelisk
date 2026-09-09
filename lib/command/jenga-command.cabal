@@ -28,6 +28,7 @@ library
   hs-source-dirs: src
   exposed-modules:
     Jenga.Command
+    Jenga.Command.App
     Jenga.Command.Run
     Jenga.Command.Repl
     Jenga.Command.Hoogle
@@ -37,6 +38,7 @@ library
     Jenga.Command.Init
     Jenga.Command.Thunk
     Jenga.Command.Utils
+    Obelisk.App
   other-modules:
     Paths_jenga_command
   autogen-modules:
@@ -50,6 +52,15 @@ library
     , which
     , unix
     , bytestring
+    , effectful-core
+    , cli-extras
+    , exceptions
+    , lens
+    , logging-effect
+    , mtl
+    , nix-thunk
+    , text
+    , transformers
   default-language: GHC2024
   default-extensions:
     FunctionalDependencies

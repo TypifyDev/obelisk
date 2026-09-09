@@ -14,19 +14,28 @@ ghcidPath = $(staticWhich "ghcid")
 cabalPath = $(staticWhich "cabal")
 
 data RunOpts = RunOpts
-  { runExtraArgs :: [String]
+  { runReplOnly :: Bool
+  , runTarget :: Maybe String
+  , runExtraArgs :: [String]
   }
 
 runParser :: Parser RunOpts
 runParser = RunOpts
-  <$> many (strArgument (metavar "CABAL_ARGS..." <> help "Extra arguments passed to cabal repl"))
+  <$> switch (long "repl-only" <> help "Skip the initial cabal build and drop directly into ghcid — ghcid surfaces errors even on red transitive deps, iterating on a specific target with sub-second reloads")
+  <*> optional (strOption (long "target" <> metavar "TARGET" <> help "cabal repl target (default: lib:backend). Useful with --repl-only for iterating on a specific transitive dep."))
+  <*> many (strArgument (metavar "CABAL_ARGS..." <> help "Extra arguments passed to cabal repl"))
 
 run :: RunOpts -> IO ()
 run opts = do
-  -- Step 1: Full cabal build (triggers WASM via frontend-wasm Setup.hs)
-  info "Building backend (including WASM frontend)..."
-  let buildArgs = ["build", "backend", "-O0"] <> devGhcOptions <> runExtraArgs opts
-  runProcessWithEnv cabalPath buildArgs [("JENGA_CROSS_CABAL_ARGS", devCrossCabalArgs)]
+  -- Step 1: Full cabal build (skipped if --repl-only). Triggers WASM via
+  -- frontend-wasm Setup.hs; without it, frontend assets stay stale from the
+  -- last successful jenga run.
+  if runReplOnly opts
+    then info "--repl-only: skipping initial cabal build, going straight to ghcid"
+    else do
+      info "Building backend (including WASM frontend)..."
+      let buildArgs = ["build", "backend", "-O0"] <> devGhcOptions <> runExtraArgs opts
+      runProcessWithEnv cabalPath buildArgs [("JENGA_CROSS_CABAL_ARGS", devCrossCabalArgs)]
 
   -- Step 2: ghcid for sub-second reloads
   -- Uses single-unit repl (lib:backend only) because GHC 9.14's multi-unit
@@ -36,8 +45,9 @@ run opts = do
   -- via --restart (slower, but automatic and correct).
   info "Starting ghcid (sub-second reloads on save)..."
   info "Ctrl+C to stop. Re-run jenga run to rebuild WASM after frontend changes."
-  let replCmd = unwords $
-        [cabalPath, "repl", "lib:backend"
+  let target = maybe "lib:backend" id (runTarget opts)
+      replCmd = unwords $
+        [cabalPath, "repl", target
         , "-O0", "-f", "-cross"
         ] <> devGhcOptions <> runExtraArgs opts
   execProcess ghcidPath
