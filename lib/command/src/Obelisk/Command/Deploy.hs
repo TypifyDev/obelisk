@@ -192,7 +192,12 @@ deployPush deployPath builders = do
         , _target_attr = Just "server.system"
         , _target_expr = Nothing
         }
-      & nixBuildConfig_outLink .~ OutLink_None
+      -- Pin the pushed artifact against nix-collect-garbage. OutLink_None
+      -- left it un-rooted; the next GC would nuke it and the user would
+      -- lose the whole closure. Indirect root at a stable per-host path
+      -- inside deployPath survives GCs across pushes.
+      & nixBuildConfig_outLink .~ OutLink_IndirectRoot
+          (deployPath </> ("result-" <> fmap (\c -> if c == '.' then '_' else c) host))
       & nixCmdConfig_args .~ (
         [ strArg "hostName" $ fmap (\c -> if c == '.' then '_' else c) host
         , strArg "adminEmail" adminEmail
@@ -356,8 +361,13 @@ deployMobile platform mobileArgs = withProjectRoot "." $ \root -> do
         , _target_attr = Nothing
         , _target_expr = Just expr
         }, [])
+  -- Same pinning fix as deployPush: OutLink_None orphaned the mobile
+  -- artifact so the next nix-collect-garbage would delete it. Indirect
+  -- root at a stable per-platform path under the project root keeps it
+  -- alive across GCs.
   result <- nixCmd $ NixCmd_Build $ def
-    & nixBuildConfig_outLink .~ OutLink_None
+    & nixBuildConfig_outLink .~ OutLink_IndirectRoot
+        (root </> ("result-mobile-" <> show platform))
     & nixCmdConfig_target .~ nixBuildTarget
   let mobileArtifact = case platform of
                          IOS -> "iOS App"
