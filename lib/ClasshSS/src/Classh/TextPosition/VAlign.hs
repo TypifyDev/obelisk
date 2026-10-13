@@ -4,8 +4,8 @@ module Classh.TextPosition.VAlign where
 import Classh.Class.ShowTW
 import Data.Default
 
--- Vertical Align
--- | TODO: Add Sub and Super values as Types accessed via TextConfigTW
+-- | Vertical alignment values, mapping to Tailwind @align-*@ classes.
+-- Applied via TextConfigTW.
 data VAlign
   = TA_Base
   | TA_Top

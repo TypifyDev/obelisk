@@ -16,6 +16,7 @@ library
                  constraints,
                  constraints-extras,
                  containers,
+                 data-default,
                  dependent-map,
                  dependent-sum,
                  dependent-sum-template,
@@ -29,11 +30,17 @@ library
                  mtl,
                  network-uri,
                  jenga-executable-config-lookup,
+                 patch,
                  primitive,
                  ref-tf,
                  reflex,
                  reflex-dom-core,
+                 reflex-dom-core-effectful,
+                 effectful-core,
                  semigroupoids,
+                 servant,
+                 servant-client-core,
+                 http-media,
                  template-haskell,
                  tabulation,
                  text,
@@ -42,8 +49,14 @@ library
                  universe-some
 
   exposed-modules: Jenga.Route
-                   Jenga.Route.TH
+                   Jenga.Route.Bridge
+                   Jenga.Route.Core
+                   Jenga.Route.Servant
+                   Jenga.Route.Effect
                    Jenga.Route.Frontend
+                   Jenga.Route.FrontendMTL
+                   Jenga.Route.TH
+                   Reflex.Effectful.Effect.Jenga.Route
 
   ghc-options: -O
 

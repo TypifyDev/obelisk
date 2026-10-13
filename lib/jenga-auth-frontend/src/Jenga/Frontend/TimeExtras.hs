@@ -3,37 +3,39 @@
 module Jenga.Frontend.TimeExtras where
 
 import Reflex hiding (PerformEvent, TriggerEvent, PostBuild, performEvent, holdDyn, foldDyn, getPostBuild)
-import qualified Reflex.PerformEvent.Class as RPE (PerformEvent)
+import qualified Reflex.PerformEvent.Class as RPE (PerformEvent, performEvent)
 import qualified Reflex.Class as RC (MonadHold)
 import qualified Reflex.TriggerEvent.Class as RTE (TriggerEvent)
+import qualified Reflex.PostBuild.Class as RPB (PostBuild, getPostBuild)
 import Control.Monad (forM)
+import Control.Monad.Fix (MonadFix)
 import Data.Time
 
 import Effectful (Eff, (:>), IOE)
-import Reflex.Effectful.Effect.Hold (Hold, holdDyn, foldDyn)
-import Reflex.Effectful.Effect.PerformEvent (PerformEvent, performEvent)
-import Reflex.Effectful.Effect.TriggerEvent (TriggerEvent)
-import Reflex.Effectful.Effect.PostBuild (PostBuild, getPostBuild)
-import Reflex.Effectful.Types (KnownTimeline)
+import Reflex.Class (holdDyn)
+import Reflex.Dynamic (foldDyn)
+import Reflex.Host.HeadlessEffectful (Hold)
+import Reflex.Host.HeadlessEffectful (Sample)
+import Reflex.Host.HeadlessEffectful (PerformEventH, performEventH)
+import Reflex.Host.HeadlessEffectful (TriggerEvent)
 import Control.Monad.IO.Class (liftIO, MonadIO)
 
-timer :: ( PerformEvent t :> es
-         , Hold t :> es
-         , TriggerEvent t :> es
-         , IOE :> es
-         , Reflex t
-         , KnownTimeline es t
-         , RPE.PerformEvent t (Eff es)
-         , RC.MonadHold t (Eff es)
-         , RTE.TriggerEvent t (Eff es)
-         , MonadIO (Performable (Eff es))
-         )
-      => Event t ()
-      -> Event t ()
-      -> Event t ()
-      -> Eff es (Dynamic t NominalDiffTime)
-timer start stop reset = do
-  startTimeEv <- performEvent $ liftIO getCurrentTime <$ start
+timerE :: ( PerformEventH t :> es
+          , Hold t :> es, Sample t :> es
+          , TriggerEvent t :> es
+          , IOE :> es
+          , Reflex t
+          , RPE.PerformEvent t (Eff es)
+          , RC.MonadHold t (Eff es)
+          , RTE.TriggerEvent t (Eff es)
+          , MonadIO (Performable (Eff es))
+          )
+       => Event t ()
+       -> Event t ()
+       -> Event t ()
+       -> Eff es (Dynamic t NominalDiffTime)
+timerE start stop reset = do
+  startTimeEv <- performEventH $ liftIO getCurrentTime <$ start
   mStartTime <- holdDyn Nothing $ leftmost
     [ Just <$> startTimeEv
     , Nothing <$ stop
@@ -48,32 +50,74 @@ timer start stop reset = do
         ) (current mStartTime) tick
   holdDyn 0 elapsed
 
-tickLossyFrom'' :: ( PerformEvent t :> es
+-- | MTL twin of 'timerE'.
+timer :: ( Reflex t
+         , RPE.PerformEvent t m
+         , RTE.TriggerEvent t m
+         , RC.MonadHold t m
+         , MonadIO (Performable m)
+         , MonadFix m
+         )
+      => Event t ()
+      -> Event t ()
+      -> Event t ()
+      -> m (Dynamic t NominalDiffTime)
+timer start stop reset = do
+  startTimeEv <- RPE.performEvent $ liftIO getCurrentTime <$ start
+  mStartTime <- holdDyn Nothing $ leftmost
+    [ Just <$> startTimeEv
+    , Nothing <$ stop
+    , Nothing <$ reset
+    ]
+  firstStart <- headE startTimeEv
+  tick <- tickLossyFrom' $ (0.1,) <$> firstStart
+  let elapsed = attachWith (\mStart tickInfo ->
+        case mStart of
+          Nothing -> 0
+          Just s  -> diffUTCTime (_tickInfo_lastUTC tickInfo) s
+        ) (current mStartTime) tick
+  holdDyn 0 elapsed
+
+tickLossyFrom'' :: ( PerformEventH t :> es
                    , TriggerEvent t :> es
                    , IOE :> es
                    , Reflex t
-                   , KnownTimeline es t
                    , RPE.PerformEvent t (Eff es)
                    , RTE.TriggerEvent t (Eff es)
                    , MonadIO (Performable (Eff es))
                    ) => NominalDiffTime -> Event t a -> Eff es (Event t TickInfo)
 tickLossyFrom'' nomnom ev = do
-  eventTime <- performEvent $ liftIO getCurrentTime <$ ev
+  eventTime <- performEventH $ liftIO getCurrentTime <$ ev
   tickLossyFrom' $ (nomnom,) <$> eventTime
 
-countTimeFrom :: ( PerformEvent t :> es
-                 , TriggerEvent t :> es
-                 , Hold t :> es
-                 , IOE :> es
-                 , Reflex t
-                 , KnownTimeline es t
-                 , RPE.PerformEvent t (Eff es)
-                 , RTE.TriggerEvent t (Eff es)
-                 , MonadIO (Performable (Eff es))
-                 ) => NominalDiffTime -> Event t a -> Eff es (Event t NominalDiffTime)
-countTimeFrom interval ev = do
-  eventTime <- performEvent $ liftIO getCurrentTime <$ ev
+countTimeFromE :: ( PerformEventH t :> es
+                  , TriggerEvent t :> es
+                  , Hold t :> es, Sample t :> es
+                  , IOE :> es
+                  , Reflex t
+                  , RPE.PerformEvent t (Eff es)
+                  , RTE.TriggerEvent t (Eff es)
+                  , MonadIO (Performable (Eff es))
+                  ) => NominalDiffTime -> Event t a -> Eff es (Event t NominalDiffTime)
+countTimeFromE interval ev = do
+  eventTime <- performEventH $ liftIO getCurrentTime <$ ev
   eventTimeDyn <- foldDyn const undefined eventTime
+  tick <- tickLossyFrom' $ (interval,) <$> eventTime
+  pure $ attachWith (\start' now_ -> diffUTCTime (_tickInfo_lastUTC now_) start') (current eventTimeDyn) tick
+
+-- | MTL twin of 'countTimeFromE'. Mirrors the Eff body using Reflex's MTL
+-- classes directly (no 'Eff' wrapping needed; this function is polymorphic
+-- in the host monad 'm').
+countTimeFrom :: ( Reflex t
+                 , RPE.PerformEvent t m
+                 , RTE.TriggerEvent t m
+                 , RC.MonadHold t m
+                 , MonadIO (Performable m)
+                 , MonadFix m
+                 ) => NominalDiffTime -> Event t a -> m (Event t NominalDiffTime)
+countTimeFrom interval ev = do
+  eventTime <- RPE.performEvent $ liftIO getCurrentTime <$ ev
+  eventTimeDyn <- foldDyn const (error "countTimeFrom: sampled before first event") eventTime
   tick <- tickLossyFrom' $ (interval,) <$> eventTime
   pure $ attachWith (\start' now_ -> diffUTCTime (_tickInfo_lastUTC now_) start') (current eventTimeDyn) tick
 
@@ -84,22 +128,17 @@ hasBeenRange :: Reflex t => (NominalDiffTime, NominalDiffTime) -> Dynamic t Nomi
 hasBeenRange (low, high) tElapsed = mapMaybe (\t_ -> if t_ > low && t_ < high then Just () else Nothing) (updated tElapsed)
 
 getPostBuildDelayed
-  :: ( PostBuild t :> es
-     , PerformEvent t :> es
-     , TriggerEvent t :> es
-     , Hold t :> es
-     , IOE :> es
-     , Reflex t
-     , KnownTimeline es t
-     , RPE.PerformEvent t (Eff es)
-     , RC.MonadHold t (Eff es)
-     , RTE.TriggerEvent t (Eff es)
-     , MonadIO (Performable (Eff es))
+  :: ( Reflex t
+     , RPB.PostBuild t m
+     , RPE.PerformEvent t m
+     , RC.MonadHold t m
+     , RTE.TriggerEvent t m
+     , MonadIO (Performable m)
      )
   => [NominalDiffTime]
-  -> Eff es (Event t ())
+  -> m (Event t ())
 getPostBuildDelayed renderTimes = do
-  pBuild <- getPostBuild
+  pBuild <- RPB.getPostBuild
   pbDs <- forM renderTimes $ \t_ -> do
     delay t_ pBuild
   fmap (() <$) $ headE $ leftmost pbDs

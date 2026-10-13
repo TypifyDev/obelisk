@@ -15,8 +15,8 @@ library
     , containers
     , data-default
     , jenga-asset-serve-snap
-    , jenga-route-servant
-    , reflex-effectful
+    , jenga-frontend
+    , jenga-route
     , servant
     , servant-snap
     , snap-core

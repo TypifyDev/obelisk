@@ -12,6 +12,9 @@ import Jenga.Common.Auth
 
 import Rhyolite.Account
 import Jenga.Route
+import Jenga.Route.Servant (HasRoute)
+import Data.Kind (Type)
+import Data.Proxy (Proxy)
 import Database.PostgreSQL.Simple
 import Database.Beam.Postgres
 import Database.Beam.Schema
@@ -27,10 +30,10 @@ import Text.Email.Validate as EmailValidate
 import qualified Data.Text as T
 
 import Effectful (Eff, (:>), IOE)
-import Effectful.Reader.Static ()
+import Effectful.Reader.Static (Reader)
 
 inviteHandler
-  :: forall api db cfg be frontendRoute es x n.
+  :: forall (api :: Type -> Type) db cfg be frontendRoute es x n.
      ( IOE :> es
      , Database Postgres db
      , Reader cfg :> es, HasConfig cfg CS.Key
@@ -38,8 +41,10 @@ inviteHandler
      , HasRoute api (R frontendRoute)
      , Reader cfg :> es, HasConfig cfg BaseURL
      , Reader cfg :> es, HasConfig cfg AdminEmail
+     , HasConfig cfg (FullRouteEncoder api frontendRoute)
      , HasJengaTable Postgres db Account
      , HasJengaTable Postgres db UserTypeTable
+     , HasJengaTable Postgres db OrgOwnedUsers
      , HasJengaTable Postgres db OrganizationEmails
      , HasJengaTable Postgres db SendEmailTask
      , HasJsonNotifyTbl be SendEmailTask n
@@ -53,7 +58,7 @@ inviteHandler
   -> Eff es (Either (BackendError InviteError) ())
 inviteHandler proxy email inviter resetRoute mkBody = do
   (acctTbl :: PgTable Postgres db Account) <- asksTableM
-  user <- (fmap.fmap) _account_email $ withDbEnv @cfg $ runSelectReturningOne $ lookup_ acctTbl inviter
+  user <- (fmap.fmap) _account_email $ withDbEnvE @cfg $ runSelectReturningOne $ lookup_ acctTbl inviter
   signupRes <- userSignupHandler @api @db @cfg
     proxy
     email

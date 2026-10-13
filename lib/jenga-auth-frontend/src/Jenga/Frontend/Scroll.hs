@@ -6,6 +6,7 @@ import Jenga.Frontend.DomExtras
 import Jenga.Route.Frontend (RouteToUrl, SetRoute)
 import Reflex (Reflex, Event, ffor)
 import Language.Javascript.JSaddle hiding (liftJSM)
+import qualified Language.Javascript.JSaddle as JSaddle (liftJSM)
 import qualified GHCJS.DOM.Types as DOM
 import Control.Lens ((^.))
 import Control.Monad (void)
@@ -14,24 +15,27 @@ import Data.Maybe (fromMaybe)
 import Data.Text as T
 
 import Effectful (Eff, (:>))
-import Reflex.Effectful.Effect.Dom (Dom, blank)
-import Reflex.Effectful.Effect.PostBuild (PostBuild)
-import Reflex.Effectful.Effect.PerformEvent (PerformEvent, performEvent_)
-import Reflex.Effectful.Effect.Prerender (Prerender, prerender)
-import Reflex.Effectful.Effect.JSM (JSM', liftJSM)
-import Reflex.Effectful.Types (KnownTimeline)
+import Reflex.Effectful.DomHost (DomBuilderE, blank)
+import Reflex.Dom.Builder.Immediate (GhcjsDomSpace)
+import Reflex.Effectful.DomHost (DomBuilderSpaceE)
+import Reflex.Host.HeadlessEffectful (PostBuild)
+import Reflex.Host.HeadlessEffectful (PerformEventH, performEventH_)
+import Reflex.Effectful.DomHost (HasPrerender, prerender, ClientEs)
+import Reflex.Effectful.DomHost (JSM', liftJSM)
+import qualified Reflex.Dom.Core as RD
 
 routeLinkHash
-  :: forall t es a route.
-     ( Dom t :> es
+  :: forall t space es a route.
+     ( DomBuilderE t space :> es
+     , space ~ DomBuilderSpaceE es
+     , DomBuilderSpaceE es ~ GhcjsDomSpace
      , RouteToUrl route :> es
      , SetRoute t route :> es
-     , Prerender t :> es
+     , HasPrerender t space es
      , PostBuild t :> es
-     , PerformEvent t :> es
+     , PerformEventH t :> es
      , JSM' :> es
      , Reflex t
-     , KnownTimeline es t
      )
   => route
   -> Maybe T.Text
@@ -40,14 +44,17 @@ routeLinkHash
   -> Eff es a
 routeLinkHash route mFragContainer frag wrappedChild = do
   (_e, a) <- routeLinkImpl @t @es @a @route mempty route wrappedChild
-  scrollToFrag mFragContainer frag _e
+  scrollToFragE @es @t @space mFragContainer frag _e
   return a
 
-scrollToTop :: (JSM' :> es) => Eff es ()
-scrollToTop = liftJSM $ void $ jsg ("window" :: JSString) ^. js2 ("scrollTo" :: JSString) (0 :: Int) (0 :: Int)
+scrollToTopE :: (JSM' :> es) => Eff es ()
+scrollToTopE = liftJSM $ void $ jsg ("window" :: JSString) ^. js2 ("scrollTo" :: JSString) (0 :: Int) (0 :: Int)
 
-scrollElem :: (JSM' :> es) => JSVal -> (Float,Float) -> Eff es ()
-scrollElem e (x_,y_) = liftJSM $ void $ e ^. js1 ("scrollBy" :: JSString) opts
+scrollToTop :: MonadJSM m => m ()
+scrollToTop = JSaddle.liftJSM $ void $ jsg ("window" :: JSString) ^. js2 ("scrollTo" :: JSString) (0 :: Int) (0 :: Int)
+
+scrollElemE :: (JSM' :> es) => JSVal -> (Float,Float) -> Eff es ()
+scrollElemE e (x_,y_) = liftJSM $ void $ e ^. js1 ("scrollBy" :: JSString) opts
   where opts = do
           o <- create
           o ^. jss ("top" :: JSString) y_
@@ -55,8 +62,26 @@ scrollElem e (x_,y_) = liftJSM $ void $ e ^. js1 ("scrollBy" :: JSString) opts
           o ^. jss ("behavior" :: JSString) ("smooth" :: JSString)
           pure o
 
-getDimensions :: (JSM' :> es) => T.Text -> Eff es (Float, Float)
-getDimensions idTag = liftJSM $ do
+scrollElem :: MonadJSM m => JSVal -> (Float,Float) -> m ()
+scrollElem e (x_,y_) = JSaddle.liftJSM $ void $ e ^. js1 ("scrollBy" :: JSString) opts
+  where opts = do
+          o <- create
+          o ^. jss ("top" :: JSString) y_
+          o ^. jss ("left" :: JSString) x_
+          o ^. jss ("behavior" :: JSString) ("smooth" :: JSString)
+          pure o
+
+getDimensions :: MonadJSM m => T.Text -> m (Float, Float)
+getDimensions idTag = JSaddle.liftJSM $ do
+  doc <- jsg ("document" :: JSString)
+  idEl <- doc ^. js1 ("getElementById" :: JSString) idTag
+  width_ <- fromJSVal =<< idEl ^. js ("clientWidth" :: JSString)
+  height_ <- fromJSVal =<< idEl ^. js ("clientHeight" :: JSString)
+  clogJSM (width_,height_)
+  pure (fromMaybe 500 width_, fromMaybe 500 height_)
+
+getDimensionsE :: (JSM' :> es) => T.Text -> Eff es (Float, Float)
+getDimensionsE idTag = liftJSM $ do
   doc <- jsg ("document" :: JSString)
   idEl <- doc ^. js1 ("getElementById" :: JSString) idTag
   width_ <- fromJSVal =<< idEl ^. js ("clientWidth" :: JSString)
@@ -107,8 +132,25 @@ scrollToId containerId idFrag = do
           clogJSM container
           pure ()
 
-scrollToFrag :: forall es t. (Prerender t :> es, PerformEvent t :> es, Dom t :> es, JSM' :> es, Reflex t, KnownTimeline es t)
+scrollToFragE :: forall es t space.
+  ( HasPrerender t space es, PerformEventH t :> es
+  , PerformEventH t :> ClientEs t space es
+  , DomBuilderE t space :> es, JSM' :> es, Reflex t
+  )
   => Maybe T.Text -> T.Text -> Event t () -> Eff es ()
-scrollToFrag mContainer fragId e = do
-  _ <- prerender blank $ performEvent_ $ ffor e $ \_ -> scrollToId mContainer fragId
+scrollToFragE mContainer fragId e = do
+  _ <- prerender @t @space blank $ performEventH_ $ ffor e $ \_ -> liftJSM $ scrollToId mContainer fragId
   pure ()
+
+-- | MTL twin of 'scrollToFragE'. Uses reflex-dom's 'RD.prerender_' +
+-- 'RD.performEvent_' so it unifies with polymorphic Reflex monad stacks
+-- (e.g. 'Client m' inside a 'prerender_').
+scrollToFrag :: forall t m.
+  ( RD.Reflex t
+  , Monad m
+  , RD.Prerender t m
+  )
+  => Maybe T.Text -> T.Text -> RD.Event t () -> m ()
+scrollToFrag mContainer fragId e =
+  RD.prerender_ RD.blank $ RD.performEvent_ $ ffor e $ \_ ->
+    JSaddle.liftJSM $ scrollToId mContainer fragId

@@ -16,7 +16,7 @@ module Jenga.Common.Schema where
 
 
 import Jenga.Common.Auth
-import Jenga.Common.Company (CompanyInfo)
+import Jenga.Common.Company
 import Rhyolite.Account (Account)
 import Control.Lens.TH
 import Data.Aeson
@@ -29,7 +29,7 @@ import GHC.Generics
 import Network.Mail.Mime (Mail)
 import Network.Mail.Mime.Orphans ()
 import qualified Data.Text as T
-import Data.Kind (Constraint, Type)
+import Data.Kind (Type, Constraint)
 import Data.Time
 
 data SendEmailTask f = SendEmailTask
@@ -121,10 +121,8 @@ instance FromJSONKey (PrimaryKey Unsubscribe Identity)
 data UserTypeTable f = UserTypeTable
   { _userType_acctID :: Columnar f Int64
   , _userType_userType :: Columnar f UserType
-  , _userType_companyID :: Columnar f (Maybe T.Text)
-  -- TODO: this constraint:
-  -- we separate companyID from userType so that we can create auth patterns but
-  -- if type == Admin then companyID must be (Just _)
+  , _userType_companyID :: PrimaryKey CompanyInfo (Nullable f)
+  -- ^ If type == Admin then companyID must be (Just _)
   } deriving Generic
 
 instance Table UserTypeTable where
@@ -154,45 +152,39 @@ instance ToJSONKey (PrimaryKey UserTypeTable Identity)
 instance FromJSONKey (PrimaryKey UserTypeTable Identity)
 
 
--- | Represents all emails which have been paid for in some way
-data OrganizationEmails f = OrganizationEmails
-  { _validEmails_email :: Columnar f T.Text
-  , _validEmails_organizationFrom :: Columnar f T.Text
+-- | Maps an account to a company they belong to as a managed user.
+-- The account must exist before this row is created.
+data OrgOwnedUsers f = OrgOwnedUsers
+  { _orgOwnedUsers_accountId :: PrimaryKey Account f
+  , _orgOwnedUsers_companyId :: PrimaryKey CompanyInfo f
   } deriving Generic
 
-instance Beamable OrganizationEmails
+instance Beamable OrgOwnedUsers
+instance Beamable (PrimaryKey OrgOwnedUsers)
 
-type HasOrganizationEmailsConstraint (c :: Type -> Constraint) f =
-  ( c (Columnar f T.Text)
-  , c (Columnar f T.Text)
+type HasOrgOwnedUsersConstraint (c :: Type -> Constraint) f =
+  ( c (Columnar f (SqlSerial Int64))
+  , c (PrimaryKey Account f)
+  , c (PrimaryKey CompanyInfo f)
   )
 
-type HasOrganizationEmailsIdConstraint (c :: Type -> Constraint) f =
-  ( c (Columnar f T.Text)
-  )
+instance Table OrgOwnedUsers where
+  data PrimaryKey OrgOwnedUsers f = OrgOwnedUserId
+    { _orgOwnedUserId :: PrimaryKey Account f
+    } deriving Generic
+  primaryKey = OrgOwnedUserId <$> _orgOwnedUsers_accountId
 
-instance Table OrganizationEmails where
-  newtype PrimaryKey OrganizationEmails f = PaidEmail { unEmailKey :: Columnar f T.Text } deriving Generic
-  primaryKey = PaidEmail <$> _validEmails_email
+deriving instance HasOrgOwnedUsersConstraint Eq f => Eq (OrgOwnedUsers f)
+deriving instance HasOrgOwnedUsersConstraint Show f => Show (OrgOwnedUsers f)
 
+deriving instance Eq (PrimaryKey OrgOwnedUsers Identity)
+deriving instance Show (PrimaryKey OrgOwnedUsers Identity)
+instance ToJSON (PrimaryKey OrgOwnedUsers Identity)
 
-deriving instance HasOrganizationEmailsConstraint Eq f => Eq (OrganizationEmails f)
-deriving instance HasOrganizationEmailsConstraint Ord f => Ord (OrganizationEmails f)
-deriving instance HasOrganizationEmailsConstraint Show f => Show (OrganizationEmails f)
+instance FromJSON (PrimaryKey OrgOwnedUsers Identity)
+instance ToJSON (OrgOwnedUsers Identity)
+instance FromJSON (OrgOwnedUsers Identity)
 
-deriving instance HasOrganizationEmailsIdConstraint Eq f => Eq (PrimaryKey OrganizationEmails f)
-deriving instance HasOrganizationEmailsIdConstraint Ord f => Ord (PrimaryKey OrganizationEmails f)
-deriving instance HasOrganizationEmailsIdConstraint Read f => Read (PrimaryKey OrganizationEmails f)
-deriving instance HasOrganizationEmailsIdConstraint Show f => Show (PrimaryKey OrganizationEmails f)
-deriving instance HasOrganizationEmailsIdConstraint ToJSON f => ToJSON (PrimaryKey OrganizationEmails f)
--- deriving instance HasOrganizationEmailsIdConstraint FromJSON f => FromJSON (PrimaryKey OrganizationEmails f)
--- deriving instance HasOrganizationEmailsIdConstraint ToJSONKey f => ToJSONKey (PrimaryKey OrganizationEmails f)
--- deriving instance HasOrganizationEmailsIdConstraint FromJSONKey f => FromJSONKey (PrimaryKey OrganizationEmails f)
-
-deriving instance HasOrganizationEmailsIdConstraint Semigroup f => Semigroup (PrimaryKey OrganizationEmails f)
-deriving instance HasOrganizationEmailsIdConstraint Monoid f => Monoid (PrimaryKey OrganizationEmails f)
-
-instance Beamable (PrimaryKey OrganizationEmails)
 
 
 data LogItemRow f = LogItemRow
@@ -241,8 +233,8 @@ instance Table LogItemRow where
 
 
 data InviteLink f = InviteLink
-  { _inviteLink_orgName :: Columnar f OrgName -- Nothing if its a promotional link by us
-  , _inviteLink_code :: Columnar f T.Text -- this is a hash really
+  { _inviteLink_companyId :: PrimaryKey CompanyInfo f
+  , _inviteLink_code :: Columnar f T.Text
   , _inviteLink_numLeft :: Columnar f (Maybe Int64) -- Org may set a cap on how many can use their link
   } deriving Generic
 
@@ -254,9 +246,10 @@ instance Beamable InviteLink
 instance Beamable (PrimaryKey InviteLink)
 
 type HasInviteLinkTableConstraint (c :: Type -> Constraint) f =
-  ( c (Columnar f (Maybe OrgName))
+  ( c (Columnar f (SqlSerial Int64))
   , c (Columnar f T.Text)
   , c (Columnar f (Maybe Int64))
+  , c (PrimaryKey CompanyInfo f)
   )
 
 type HasInviteLinkTableIdConstraint (c :: Type -> Constraint) f =
@@ -431,37 +424,41 @@ data Authd = GithubAuthd GithubIDRequest --  | other auths eg. BasicAuth
 data GithubIDRequest = GithubIDRequest T.Text
 
 
--- | Maps an Account to the CompanyInfo they belong to (org-based signup /
--- invite flow). The account must exist before this row is created.
-data OrgOwnedUsers f = OrgOwnedUsers
-  { _orgOwnedUsers_accountId :: PrimaryKey Account f
-  , _orgOwnedUsers_companyId :: PrimaryKey CompanyInfo f
+data OrganizationEmails f = OrganizationEmails
+  { _validEmails_email :: Columnar f T.Text
+  , _validEmails_organizationFrom :: Columnar f T.Text
   } deriving Generic
 
-instance Beamable OrgOwnedUsers
-instance Beamable (PrimaryKey OrgOwnedUsers)
+instance Beamable OrganizationEmails
 
-type HasOrgOwnedUsersConstraint (c :: Type -> Constraint) f =
-  ( c (Columnar f (SqlSerial Int64))
-  , c (PrimaryKey Account f)
-  , c (PrimaryKey CompanyInfo f)
+type HasOrganizationEmailsConstraint (c :: Type -> Constraint) f =
+  ( c (Columnar f T.Text)
+  , c (Columnar f T.Text)
   )
 
-instance Table OrgOwnedUsers where
-  data PrimaryKey OrgOwnedUsers f = OrgOwnedUserId
-    { _orgOwnedUserId :: PrimaryKey Account f
-    } deriving Generic
-  primaryKey = OrgOwnedUserId <$> _orgOwnedUsers_accountId
+type HasOrganizationEmailsIdConstraint (c :: Type -> Constraint) f =
+  ( c (Columnar f T.Text)
+  )
 
-deriving instance HasOrgOwnedUsersConstraint Eq f => Eq (OrgOwnedUsers f)
-deriving instance HasOrgOwnedUsersConstraint Show f => Show (OrgOwnedUsers f)
+instance Table OrganizationEmails where
+  newtype PrimaryKey OrganizationEmails f = PaidEmail { unEmailKey :: Columnar f T.Text } deriving Generic
+  primaryKey = PaidEmail <$> _validEmails_email
 
-deriving instance Eq (PrimaryKey OrgOwnedUsers Identity)
-deriving instance Show (PrimaryKey OrgOwnedUsers Identity)
-instance ToJSON (PrimaryKey OrgOwnedUsers Identity)
-instance FromJSON (PrimaryKey OrgOwnedUsers Identity)
-instance ToJSON (OrgOwnedUsers Identity)
-instance FromJSON (OrgOwnedUsers Identity)
+
+deriving instance HasOrganizationEmailsConstraint Eq f => Eq (OrganizationEmails f)
+deriving instance HasOrganizationEmailsConstraint Ord f => Ord (OrganizationEmails f)
+deriving instance HasOrganizationEmailsConstraint Show f => Show (OrganizationEmails f)
+
+deriving instance HasOrganizationEmailsIdConstraint Eq f => Eq (PrimaryKey OrganizationEmails f)
+deriving instance HasOrganizationEmailsIdConstraint Ord f => Ord (PrimaryKey OrganizationEmails f)
+deriving instance HasOrganizationEmailsIdConstraint Read f => Read (PrimaryKey OrganizationEmails f)
+deriving instance HasOrganizationEmailsIdConstraint Show f => Show (PrimaryKey OrganizationEmails f)
+deriving instance HasOrganizationEmailsIdConstraint ToJSON f => ToJSON (PrimaryKey OrganizationEmails f)
+
+deriving instance HasOrganizationEmailsIdConstraint Semigroup f => Semigroup (PrimaryKey OrganizationEmails f)
+deriving instance HasOrganizationEmailsIdConstraint Monoid f => Monoid (PrimaryKey OrganizationEmails f)
+
+instance Beamable (PrimaryKey OrganizationEmails)
 
 
 makeLenses ''SendEmailTask

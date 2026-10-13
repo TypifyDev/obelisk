@@ -144,7 +144,7 @@ library
                     , bytestring
                     , containers
                     , email-validate
-                    , jenga-route-servant
+                    , jenga-route
                     , monoidal-containers
                     , mtl
                     , signed-data

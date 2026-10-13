@@ -4,7 +4,7 @@ cabal-version: 2.0
 build-type: Simple
 
 library
-  exposed-modules: Jenga.ExecutableConfig.Lookup, Jenga.Configs
+  exposed-modules: Jenga.ExecutableConfig.Lookup, Jenga.Configs, Jenga.Configs.MTL
 
   if impl(ghcjs) || arch(javascript) || arch(wasm32)
     hs-source-dirs: src-js, src
@@ -19,8 +19,8 @@ library
     base64-bytestring,
     bytestring,
     containers,
+    effectful-core,
     exceptions,
-    exception-transformers,
     filepath,
     jsaddle,
     mmorph,
@@ -28,11 +28,12 @@ library
     mtl,
     primitive,
     ref-tf,
-    reflex-dom-core,
     reflex,
+    reflex-dom-core,
+    reflex-dom-core-effectful,
     text,
-    transformers-base,
-    transformers
+    transformers,
+    transformers-base
 
   ghc-options: -Wall
 

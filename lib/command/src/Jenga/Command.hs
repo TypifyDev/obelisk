@@ -3,7 +3,9 @@ module Jenga.Command (main) where
 import Options.Applicative
 import System.Environment (getArgs)
 
+import qualified Jenga.Command.Build as Build
 import qualified Jenga.Command.Deploy as Deploy
+import qualified Jenga.Command.Gc as Gc
 import qualified Jenga.Command.Hoogle as Hoogle
 import qualified Jenga.Command.Init as Init
 import qualified Jenga.Command.Repl as Repl
@@ -18,6 +20,8 @@ data ObCommand
   | Cmd_Hoogle Hoogle.HoogleOpts
   | Cmd_Deploy Deploy.DeployCommand
   | Cmd_Thunk [String]       -- raw args, delegated to nix-thunk
+  | Cmd_Gc Gc.GcCommand
+  | Cmd_Build Build.BuildOpts
 
 commandParser :: Parser ObCommand
 commandParser = subparser
@@ -35,6 +39,10 @@ commandParser = subparser
       (Cmd_Deploy <$> Deploy.deployParser))
   <> command "thunk"  (mkInfo "Manage nix thunks (delegates to nix-thunk)"
       (pure (Cmd_Thunk [])))
+  <> command "gc"     (mkInfo "Explicit per-derivation nix garbage collection"
+      (Cmd_Gc <$> Gc.gcParser))
+  <> command "build"  (mkInfo "cabal build <target> (default: backend) with dev flags"
+      (Cmd_Build <$> Build.buildParser))
   )
   where
     mkInfo desc p = info (helper <*> p) (progDesc desc)
@@ -62,5 +70,7 @@ main = do
         Cmd_Watch o   -> Run.run o
         Cmd_Hoogle o  -> Hoogle.run o
         Cmd_Deploy c  -> Deploy.run c
+        Cmd_Gc c      -> Gc.run c
+        Cmd_Build o   -> Build.run o
         Cmd_Repl _    -> Repl.run []    -- fallback if somehow reached
         Cmd_Thunk _   -> Thunk.run []   -- fallback if somehow reached

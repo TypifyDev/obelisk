@@ -84,3 +84,13 @@ source-repository-package
   type: git
   location: https://github.com/obsidiansystems/vessel.git
   tag: a0eafdd20b3844dd23e3b0ac537049c60b9049b0
+
+source-repository-package
+  type: git
+  location: https://github.com/obsidiansystems/cli-extras.git
+  tag: 326b80012131eecb76d05304b2bbcf778eeb6d87
+
+source-repository-package
+  type: git
+  location: https://github.com/obsidiansystems/nix-thunk.git
+  tag: 2b65d2cbf83e77a90b4103418d037ba5b0b32e77

@@ -18,7 +18,7 @@ import Prelude hiding ((>>=), (>>), return)
 import qualified Grid.Effect.Eff as G
 import Grid.Effect.Rational
 import Effectful (Eff)
-import Reflex.Effectful.Run (WidgetEff')
+import Reflex.Class (WidgetEff')
 
 -- | Dashboard layout: 4 rows, all summing to exactly 12 columns.
 -- Compile-time proven — changing any @N x@ to overflow is a type error.

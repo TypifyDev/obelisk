@@ -5,6 +5,7 @@ import Jenga.Backend.DB.Auth
 import Jenga.Backend.Utils.Query
 import Jenga.Backend.Utils.HasConfig
 import Jenga.Backend.Utils.HasTable
+import Effectful.Reader.Static (Reader)
 import Jenga.Backend.Utils.Email
 import Jenga.Common.Schema
 import Jenga.Common.BeamExtras
@@ -47,20 +48,20 @@ resetPasswordHandler (signedToken, newPass) chooseWelcomeLetter = do
   (acctsTbl :: PgTable Postgres db Account) <- asksTableM
   (uTypeTbl :: PgTable Postgres db UserTypeTable) <- asksTableM
 
-  dbConnection <- asksM @(Pool Connection) @cfg -- Cfg _dbPool
-  csk <- asksM @CS.Key @cfg -- Cfg _clientSessionKey
+  dbConnection <- asksME @(Pool Connection) @cfg -- Cfg _dbPool
+  csk <- asksME @CS.Key @cfg -- Cfg _clientSessionKey
   case readSignedWithKey csk signedToken of
     Nothing -> pure . Left . BUserError $ InvalidToken -- "Invalid token"
     Just (PasswordResetToken (accountID, nonce)) -> do
-      (rsetPass, acct, userType) <- runSerializable dbConnection $ do
+      (rsetPass, acct, userType) <- liftIO $ runSerializable dbConnection $ do
         accountOld <- selectAccountData acctsTbl accountID
         resetPass <- resetPassword' acctsTbl accountID nonce (newPass)
         userType <- getUserType uTypeTbl accountID
         pure (resetPass, accountOld, userType)
       case rsetPass of
         Left e -> do
-          liftIO $ print $ "Unknown Error on reset password" <> e
-          pure $ Left . BCritical $ Unknown e
+          liftIO $ print $ "Unknown Error on reset password " <> show e
+          pure $ Left e
         Right aid -> case acct of
           Nothing -> pure . Left . BCritical $ CouldntRetrieveAccount
           Just acct' -> do
@@ -77,7 +78,7 @@ resetPasswordHandler (signedToken, newPass) chooseWelcomeLetter = do
                     }
                   passwordState = toPasswordState . isJust . _account_password $ acct'
                   --(Subject subject, email) = chooseWelcomeLetter uType . toPasswordState . isJust . _account_password $ acct'
-                newMkEmailHtml @db @cfg [to] (chooseWelcomeLetter uType passwordState) >>= \case
+                newMkEmailHtmlE @db @Postgres @cfg @n [to] (chooseWelcomeLetter uType passwordState) >>= \case
                   Left _ -> pure . Left . BCritical $ Reset_NoEmailSent
                   Right () -> do
                     signed <- liftIO $ signWithKey csk ( aid )

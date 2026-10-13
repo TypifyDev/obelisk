@@ -1,5 +1,8 @@
+{-# LANGUAGE KindSignatures #-}
 module Jenga.Backend.Handlers.Auth.Subscriptions.NewFreeTrial where
 
+import Data.Kind (Type)
+import Effectful.Reader.Static (Reader)
 import Jenga.Backend.DB.Auth
 import Jenga.Backend.DB.Subscriptions
 import Jenga.Backend.Utils.Account
@@ -14,6 +17,8 @@ import Database.Beam.Postgres
 import Database.Beam.Schema
 import Rhyolite.Account
 import Jenga.Route
+import Jenga.Route.Servant (HasRoute)
+import Data.Proxy (Proxy)
 
 import Control.Monad.IO.Class ()
 import Data.Signed
@@ -29,7 +34,7 @@ import Effectful.Reader.Static ()
 
 
 newFreeTrialHandler
-  :: forall api db cfg be es n frontendRoute x.
+  :: forall api (db :: (Type -> Type) -> Type) cfg be es n (frontendRoute :: Type -> Type) (x :: Type).
      ( IOE :> es
      --, EmailM es db n be
      , HasJsonNotifyTbl be SendEmailTask n
@@ -39,9 +44,10 @@ newFreeTrialHandler
      , Reader cfg :> es, HasConfig cfg (Pool Connection)
      , HasRoute api (R frontendRoute)
      , Reader cfg :> es, HasConfig cfg BaseURL
+     , HasConfig cfg (FullRouteEncoder api frontendRoute)
      , HasJengaTable Postgres db Account
      , HasJengaTable Postgres db UserTypeTable
-     , HasJengaTable Postgres db OrganizationEmails
+     , HasJengaTable Postgres db OrgOwnedUsers
      , HasJengaTable Postgres db SendEmailTask
      , HasJengaTable Postgres db FreeTrial
      )
@@ -59,8 +65,8 @@ newFreeTrialHandler proxy (mCode,email) resetRoute mkEmail = do
       createNewAccountWithSetupEmail @api @db @cfg proxy validatedEmail IsSelf resetRoute mkEmail >>= \case
         Left e -> pure $ Left $ FreeTrial_Signup <$> e
         Right () -> do
-          (withDbEnv @cfg $ getUserByEmail acctsTbl $ unEmail email) >>= \case
+          (withDbEnvE @cfg $ getUserByEmail acctsTbl $ unEmail email) >>= \case
             Nothing -> pure $ Left . BCritical $ NoUserForFreeTrial-- "Error creating user: on get user: not found"
             Just user -> do
-              withDbEnv @cfg $ putNewFreeTrial freeTrialTbl (pk user) mCode
+              withDbEnvE @cfg $ putNewFreeTrial freeTrialTbl (pk user) mCode
               pure $ Right ()

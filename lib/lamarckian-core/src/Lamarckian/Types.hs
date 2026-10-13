@@ -12,6 +12,7 @@
 module Lamarckian.Types where
 
 import Jenga.Route.Frontend
+import Jenga.Route.FrontendMTL (SetRouteT, RouteToUrlT)
 import Reflex.Dom.Core
 import Control.Monad.Trans.Reader
 import qualified Data.Map as Map

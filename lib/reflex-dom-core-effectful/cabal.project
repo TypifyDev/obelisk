@@ -1,0 +1,49 @@
+-- Isolated cabal.project for building Reflex.Effectful.DomHost against
+-- eff-reflex (the reflex fork at ../eff-reflex, package name `reflex`).
+-- Bypasses the broken top-level ace-ws project resolution (which fails
+-- because `backend` depends on the since-deleted `reflex-effectful`
+-- package).
+--
+-- Scope of this project:
+--   * reflex-dom-core-effectful — this package (variant A)
+--   * reflex                    — from ../eff-reflex/
+--
+-- All other lib packages in deps/jenga/lib/ are intentionally excluded.
+packages:
+  .
+  ../eff-reflex
+  ../reflex-dom-core
+
+-- variant B's own test suite requires chrome-test-utils which isn't in
+-- this project; only its library is needed.
+package reflex-dom-core
+  tests: False
+  benchmarks: False
+
+-- Also disable flags that pull in the missing test-only chrome deps.
+constraints:
+  reflex-dom-core -gc-tests,
+  -- Force cabal onto nixpkgs' patched hspec-webdriver + webdriver pair.
+  -- Nixpkgs ships hspec-webdriver-1.2.2 + webdriver-0.12.0.1 with local
+  -- patches that let them compile together (upstream Hackage releases
+  -- can't — 1.2.2 imports Test.WebDriver.{WD,Config,Session} which
+  -- webdriver 0.11+ dropped; and every prior webdriver fails against
+  -- modern aeson / transformers). shell.nix (haskellPackages.ghcWithPackages)
+  -- installs them into GHC's global package DB so cabal picks them up
+  -- without re-resolving from Hackage.
+  hspec-webdriver == 1.2.2,
+  webdriver       == 0.12.0.1,
+  -- Same shell.nix / ghcWithPackages set — pin these so cabal doesn't
+  -- re-resolve to newer versions from Hackage, which would then be
+  -- ambiguous with the pre-built copies in the GHC package DB.
+  async           == 2.2.5,
+  lens            == 5.3.5,
+  network         == 3.2.8.0,
+  hspec           == 2.11.14,
+  hspec-core      == 2.11.14
+
+-- The library's cabal file declares many test-suites that depend on
+-- `reflex-effectful` (variant A's shim, no longer in-tree). Enabling
+-- them here would break resolution. The new 'dom-host-smoke' test-suite
+-- has been made explicitly buildable via `cabal build … --enable-tests`
+-- at invocation time, which is scoped to the specific target.

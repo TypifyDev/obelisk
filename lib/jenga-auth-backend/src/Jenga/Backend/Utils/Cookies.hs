@@ -17,6 +17,7 @@ import Rhyolite.Account
 import qualified Data.Signed.ClientSession as Sesh
 import qualified Snap
 import Web.ClientSession as CS
+import Control.Monad.Trans.Reader
 import Control.Monad.IO.Class
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as T
@@ -30,14 +31,16 @@ import qualified Data.Aeson as Aeson
 addAuthCookieHeader
   :: ( MonadIO m
      , Snap.MonadSnap m
+     , HasConfig cfg Key
+     , HasConfig cfg DomainOption
      )
-  => CS.Key
-  -> DomainOption
-  -> T.Text
+  => T.Text
   -> Id Account
-  -> m ()
-addAuthCookieHeader csk domainOpts cookieName_ acctID = do
+  -> ReaderT cfg m ()
+addAuthCookieHeader cookieName_ acctID = do
   liftIO $ putStrLn $ "addAuthCookieHeader called for account: " <> show acctID
+  domainOpts <- asksM -- Cfg _domainName
+  csk <- asksM -- clientSessionKey
   cookieValue_ <- liftIO $ authTokenToCookieValue csk acctID
   domain <- askDomainKVSnap domainOpts
 
@@ -61,13 +64,14 @@ addAuthCookieHeader csk domainOpts cookieName_ acctID = do
 -- | Set the user type cookie
 addUserTypeCookieHeader
   :: ( Snap.MonadSnap m
+     , HasConfig cfg DomainOption
      )
-  => DomainOption
-  -> T.Text
+  => T.Text
   -> UserType
-  -> m ()
-addUserTypeCookieHeader domainOpts cookieName_ userType = do
+  -> ReaderT cfg m ()
+addUserTypeCookieHeader cookieName_ userType = do
   liftIO $ putStrLn $ "addUserTypeCookieHeader called for user type: " <> show userType
+  domainOpts <- asksM
   domain <- askDomainKVSnap domainOpts
   let userTypeJsonBytes = LBS.toStrict $ Aeson.encode userType
       userTypeCookieValue = B64.encode userTypeJsonBytes

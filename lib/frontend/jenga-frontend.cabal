@@ -15,25 +15,18 @@ library
     TypeFamilies
   hs-source-dirs: src
   build-depends: base,
+                 base64-bytestring,
                  bytestring,
                  containers,
                  cookie,
-                 dependent-sum,
                  effectful-core,
                  ghcjs-dom,
-                 jsaddle,
-                 lens,
-                 mtl,
-                 jenga-executable-config-inject,
-                 jenga-executable-config-lookup,
                  jenga-route,
-                 primitive,
-                 ref-tf,
+                 jsaddle,
+                 network-uri,
                  reflex,
-                 reflex-dom-core,
-                 reflex-effectful,
-                 text,
-                 transformers
+                 reflex-dom-core-effectful,
+                 text
   exposed-modules:
     Jenga.Frontend
     Jenga.Frontend.Cookie

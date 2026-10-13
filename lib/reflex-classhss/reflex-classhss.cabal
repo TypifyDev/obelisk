@@ -22,7 +22,6 @@ common warnings
 library
     import:           warnings
     exposed-modules:  Classh.Reflex
-                      Classh.Reflex.Eff
                       Classh.Reflex.El
                       Classh.Reflex.InlineBlock
                       Classh.Reflex.Layout
@@ -31,7 +30,6 @@ library
     build-depends:    base
                     , effectful-core
                     , reflex
-                    , reflex-effectful
                       --^>=4.15.1.0
                     , containers
                     , data-default

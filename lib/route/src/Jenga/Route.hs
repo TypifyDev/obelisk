@@ -52,8 +52,8 @@ module Jenga.Route
   , rPrism
   , _R
   , renderJengaRoute
-  , renderBackendRoute
-  , renderFrontendRoute
+  , renderObeliskBackendRoute
+  , renderObeliskFrontendRoute
   , byteStringsToPageName
 
   -- * Collating Routes
@@ -153,7 +153,6 @@ import Control.Lens
   , iso
   , Iso'
   , itraverse
-  , makePrisms
   , Prism'
   , prism'
   , re
@@ -210,7 +209,7 @@ import Data.Universe
 import Data.Universe.Some
 import Network.HTTP.Types.URI
 import qualified Numeric.Lens
-import Jenga.Route.TH
+import Jenga.Route.Core
 import Text.Read (readMaybe)
 
 -- Design goals:
@@ -232,65 +231,13 @@ import Text.Read (readMaybe)
 --  Fragments
 
 --------------------------------------------------------------------------------
--- Subroutes/paths
+-- Subroutes/paths (R, :/, :., hoistR) live in Jenga.Route.Core
 --------------------------------------------------------------------------------
-
--- | This alias is used to wrap the type of a route GADT so that the type variable of the GADT is existentially quantified.
---
--- Given the following route type :
---
--- @
---
--- data MyRoutes a where
---   MyRoutes_Main :: MyRoutes ()
---   MyRoutes_A :: MyRoutes Text
---   MyRoutes_B :: MyRoutes Int
--- @
---
--- Using 'R' we're able to write type signatures without worrying about the 'a':
---
--- @
--- myRoutesWidget :: RoutedT t (R MyRoutes) m ()
--- @
---
-type R f = DSum f Identity --TODO: Better name
-
--- | Convenience builder for an 'R' using 'Identity' for the functor.
-pattern (:/) :: f a -> a -> R f
-pattern a :/ b = a :=> Identity b
-{-# COMPLETE (:/) #-}
-infixr 5 :/
 
 -- | Like '(:/)' but adds a 'Just' wrapper around the right-hand side.
 (?/) :: f (Maybe a) -> a -> R f
 r ?/ a = r :/ Just a
 infixr 5 ?/
-
-hoistR :: (forall x. f x -> g x) -> R f -> R g
-hoistR f (x :=> Identity y) = f x :/ y
-
---------------------------------------------------------------------------------
--- Dealing with pairs (i.e. non-dependently-typed subroutes/paths)
---------------------------------------------------------------------------------
-
-infixr 5 :.
-type (:.) = (,)
-
-#ifdef __GLASGOW_HASKELL__
-#if __GLASGOW_HASKELL__ >= 810
-{-# COMPLETE (:.) #-}
-#else
-{-# WARNING (:.)
-  [ "Use of this pattern in GHC < 8.10 will result in spurious non-exhaustive warnings at every use site."
-  , "We cannot provide a COMPLETE pragma to silence these due to a GHC bug: https://gitlab.haskell.org/ghc/ghc/issues/17729."
-  , "The bug hides incompleteness warnings for all two tuples when the COMPLETE pattern is in scope."
-  , "Instead, you should use (,) directly until you can switch to GHC >= 8.10, where the COMPLETE pragma is reinstated."
-  ]
-  #-}
-#endif
-#endif
-pattern (:.) :: a -> b -> a :. b
-pattern a :. b = (a, b)
 
 addPathSegmentEncoder
   :: ( Applicative check
@@ -939,12 +886,8 @@ reviewEncoder' ctx p = unsafeMkEncoder $ EncoderImpl
       Nothing -> throwError $ "reviewEncoder (" <> ctx <> "): value " <> tshow r <> " is not present in the prism"
   }
 
--- | A URL path and query string, in which trailing slashes don't matter in the path
--- and duplicate query parameters are not allowed. A final goal of encoders using this library
--- will frequently be to produce this.
-type PageName = ([Text], Map Text (Maybe Text))
-
 -- | A path (separated by slashes), and a query string.
+-- (PageName is re-exported from "Jenga.Route.Core".)
 type PathQuery = (String, String)
 
 -- | Encode a PageName into a path and query string.
@@ -969,64 +912,13 @@ handleEncoder recover e = Encoder $ do
 
 --------------------------------------------------------------------------------
 -- Actual Jenga route info
+--
+-- Types (FullRoute, JengaRoute, ResourceRoute, JSaddleWarpRoute,
+-- IndexOnlyRoute) + their GEq/GCompare/GShow/UniverseSome instances +
+-- FullRoute/JengaRoute prisms are declared once in Jenga.Route.Core.
 --------------------------------------------------------------------------------
 
--- | The typical full route type comprising all of a Jenga application's routes.
--- Parameterised by the top level GADTs that define backend and frontend routes, respectively.
-data FullRoute :: (Type -> Type) -> (Type -> Type) -> Type -> Type where
-  FullRoute_Backend :: br a -> FullRoute br fr a
-  FullRoute_Frontend :: JengaRoute fr a -> FullRoute br fr a
-
 type FullRouteEncoder br fr = Encoder Identity Identity (R (FullRoute br fr)) PageName
-
--- | A type which can represent Jenga-specific resource routes, in addition to application specific routes which serve your
--- frontend.
-data JengaRoute :: (Type -> Type) -> Type -> Type where
-  -- We need to have the `f a` as an argument here, because otherwise we have no way to specifically check for overlap between us and the given encoder
-  JengaRoute_App :: f a -> JengaRoute f a
-  JengaRoute_Resource :: ResourceRoute a -> JengaRoute f a
-
--- | A type representing the various resource routes served by Jenga. These can in principle map to any physical routes you want,
--- but sane defaults are provided by 'resourceRouteSegment'
-data ResourceRoute :: Type -> Type where
-  ResourceRoute_Static :: ResourceRoute [Text] -- This [Text] represents the *path in our static files directory*, not necessarily the URL path that the asset gets served at (although that will often be "/static/this/text/thing")
-  ResourceRoute_Ghcjs :: ResourceRoute [Text]
-  ResourceRoute_JSaddleWarp :: ResourceRoute (R JSaddleWarpRoute)
-  ResourceRoute_Version :: ResourceRoute ()
-
-data JSaddleWarpRoute :: Type -> Type where
-  JSaddleWarpRoute_JavaScript :: JSaddleWarpRoute ()
-  JSaddleWarpRoute_WebSocket :: JSaddleWarpRoute ()
-  JSaddleWarpRoute_Sync :: JSaddleWarpRoute [Text]
-
-data IndexOnlyRoute :: Type -> Type where
-  IndexOnlyRoute :: IndexOnlyRoute ()
-
-concat <$> mapM deriveRouteComponent
-  [ ''ResourceRoute
-  , ''JSaddleWarpRoute
-  , ''IndexOnlyRoute
-  ]
-
-instance (GShow br, GShow fr) => GShow (FullRoute br fr) where
-  gshowsPrec p = \case
-    FullRoute_Backend x -> showParen (p > 10) (showString "FullRoute_Backend " . gshowsPrec 11 x)
-    FullRoute_Frontend x -> showParen (p > 10) (showString "FullRoute_Frontend " . gshowsPrec 11 x)
-
-instance (GEq br, GEq fr) => GEq (FullRoute br fr) where
-  geq (FullRoute_Backend x) (FullRoute_Backend y) = geq x y
-  geq (FullRoute_Frontend x) (FullRoute_Frontend y) = geq x y
-  geq _ _ = Nothing
-
-instance (GCompare br, GCompare fr) => GCompare (FullRoute br fr) where
-  gcompare (FullRoute_Backend _) (FullRoute_Frontend _) = GLT
-  gcompare (FullRoute_Frontend _) (FullRoute_Backend _) = GGT
-  gcompare (FullRoute_Backend x) (FullRoute_Backend y) = gcompare x y
-  gcompare (FullRoute_Frontend x) (FullRoute_Frontend y) = gcompare x y
-
-instance  (UniverseSome br, UniverseSome fr) => UniverseSome (FullRoute br fr) where
-  universeSome = [Some (FullRoute_Backend x) | Some x <- universeSome]
-              ++ [Some (FullRoute_Frontend x) | Some x <- universeSome]
 
 -- | Build the typical top level application route encoder from a route for handling 404's,
 -- and segment encoders for backend and frontend routes.
@@ -1040,23 +932,6 @@ mkFullRouteEncoder missing backendSegment frontendSegment = handleEncoder (const
   pathComponentEncoder $ \case
     FullRoute_Backend backendRoute -> backendSegment backendRoute
     FullRoute_Frontend jengaRoute -> jengaRouteSegment jengaRoute frontendSegment
-
-instance UniverseSome f => UniverseSome (JengaRoute f) where
-  universeSome = concat
-    [ (\(Some x) -> Some (JengaRoute_App x)) <$> universe
-    , (\(Some x) -> Some (JengaRoute_Resource x)) <$> (universe @(Some ResourceRoute))
-    ]
-
-instance GEq f => GEq (JengaRoute f) where
-  geq (JengaRoute_App x) (JengaRoute_App y) = geq x y
-  geq (JengaRoute_Resource x) (JengaRoute_Resource y) = geq x y
-  geq _ _ = Nothing
-
-instance GCompare f => GCompare (JengaRoute f) where
-  gcompare (JengaRoute_App x) (JengaRoute_App y) = gcompare x y
-  gcompare (JengaRoute_Resource x) (JengaRoute_Resource y) = gcompare x y
-  gcompare (JengaRoute_App _) (JengaRoute_Resource _) = GLT
-  gcompare (JengaRoute_Resource _) (JengaRoute_App _) = GGT
 
 -- | If there are no additional backend routes in your app (i.e. JengaRoute gives you all the routes you need),
 -- this constructs a suitable 'Encoder' to use for encoding routes to 'PageName's. If you do have additional backend routes,
@@ -1101,14 +976,6 @@ jsaddleWarpRouteEncoder = pathComponentEncoder $ \case
   JSaddleWarpRoute_WebSocket ->  PathEnd $ unitEncoder mempty
   JSaddleWarpRoute_Sync -> PathSegment "sync" pathOnlyEncoder
 
-instance GShow appRoute => GShow (JengaRoute appRoute) where
-  gshowsPrec prec = \case
-    JengaRoute_App appRoute -> showParen (prec > 10) $
-      showString "JengaRoute_App " . gshowsPrec 11 appRoute
-    JengaRoute_Resource appRoute -> showParen (prec > 10) $
-      showString "JengaRoute_Resource " . gshowsPrec 11 appRoute
-
-
 indexOnlyRouteSegment :: (Applicative check, MonadError Text parse) => IndexOnlyRoute a -> SegmentResult check parse a
 indexOnlyRouteSegment = \case
   IndexOnlyRoute -> PathEnd $ unitEncoder mempty
@@ -1151,20 +1018,26 @@ pathQueryEncoder = unsafeMkEncoder $ EncoderImpl
 
 -- | Given a backend route and a checked route encoder, render the route (path
 -- and query string). See 'checkEncoder' for how to produce a checked encoder.
-renderBackendRoute
+--
+-- Renamed from @renderBackendRoute@ to disambiguate against the
+-- servant-based sibling in 'Jenga.Route.Servant'.
+renderObeliskBackendRoute
   :: forall br a.
      Encoder Identity Identity (R (FullRoute br a)) PageName
   -> R br
   -> Text
-renderBackendRoute enc = renderJengaRoute enc . hoistR FullRoute_Backend
+renderObeliskBackendRoute enc = renderJengaRoute enc . hoistR FullRoute_Backend
 
--- | Renders a frontend route with the supplied checked encoder
-renderFrontendRoute
+-- | Renders a frontend route with the supplied checked encoder.
+--
+-- Renamed from @renderFrontendRoute@ to disambiguate against the
+-- servant-based sibling in 'Jenga.Route.Servant'.
+renderObeliskFrontendRoute
   :: forall a fr.
      Encoder Identity Identity (R (FullRoute a fr)) PageName
   -> R fr
   -> Text
-renderFrontendRoute enc = renderJengaRoute enc . hoistR (FullRoute_Frontend . JengaRoute_App)
+renderObeliskFrontendRoute enc = renderJengaRoute enc . hoistR (FullRoute_Frontend . JengaRoute_App)
 
 -- | Renders a route of the form typically found in an Jenga project
 renderJengaRoute
@@ -1318,7 +1191,5 @@ isoEncoder = viewEncoder
 prismEncoder :: (Applicative check, MonadError Text parse) => Prism' b a -> Encoder check parse a b
 prismEncoder = reviewEncoder
 
-makePrisms ''JengaRoute
-makePrisms ''FullRoute
 deriveGEq ''Void1
 deriveGCompare ''Void1

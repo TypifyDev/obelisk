@@ -18,17 +18,15 @@ For creating Beam instances for returning larger tuples
 
 --for stupid instances
 import Database.Beam.Query (QExprToIdentity)
-import Database.Beam.Query.Internal
-  ( ThreadRewritable, WithRewrittenThread, rewriteThread
-  , ProjectibleWithPredicate(..)
-  )
+-- ThreadRewritable / ProjectibleWithPredicate 9-tuple instances now live
+-- in beam-core (beam-914-fork) — see comment on the removed instances below.
 import Database.Beam.Backend.Types (BeamBackend, Exposed, Nullable)
 import Database.Beam.Backend.SQL.Row (FromBackendRow(..), FromBackendRowM)
 --import Database.Beam.Backend.SQL.Row as X
 
 
 import Data.Proxy (Proxy(..))
-import GHC.Generics (Generic, Rep, R, K1(..), U1(..), M1(..), (:*:)(..), to)
+import GHC.Generics (Rep, R, K1(..), U1(..), M1(..), (:*:)(..), to)
 import GHC.Types (Type)
 import Data.Functor.Identity (Identity)
 
@@ -79,44 +77,11 @@ type instance QExprToIdentity (a, b, c, d, e, f, g, h, i) =
   , QExprToIdentity i
   )
 
-instance ( ThreadRewritable s a, ThreadRewritable s b, ThreadRewritable s c, ThreadRewritable s d
-         , ThreadRewritable s e, ThreadRewritable s f, ThreadRewritable s g, ThreadRewritable s h
-         , ThreadRewritable s i
-         ) =>
-  ThreadRewritable s (a, b, c, d, e, f, g, h, i) where
-  type WithRewrittenThread s s' (a, b, c, d, e, f, g, h, i) =
-    ( WithRewrittenThread s s' a, WithRewrittenThread s s' b, WithRewrittenThread s s' c, WithRewrittenThread s s' d
-    , WithRewrittenThread s s' e, WithRewrittenThread s s' f, WithRewrittenThread s s' g, WithRewrittenThread s s' h
-    , WithRewrittenThread s s' i
-    )
-  rewriteThread s' (a, b, c, d, e, f, g, h, i) =
-    ( rewriteThread s' a, rewriteThread s' b, rewriteThread s' c, rewriteThread s' d
-    , rewriteThread s' e, rewriteThread s' f, rewriteThread s' g, rewriteThread s' h
-    , rewriteThread s' i
-    )
-
-
-
-instance ( ProjectibleWithPredicate contextPredicate be res a, ProjectibleWithPredicate contextPredicate be res b, ProjectibleWithPredicate contextPredicate be res c
-         , ProjectibleWithPredicate contextPredicate be res d, ProjectibleWithPredicate contextPredicate be res e, ProjectibleWithPredicate contextPredicate be res f
-         , ProjectibleWithPredicate contextPredicate be res g, ProjectibleWithPredicate contextPredicate be res h, ProjectibleWithPredicate contextPredicate be res i
-         ) => ProjectibleWithPredicate contextPredicate be res (a, b, c, d, e, f, g, h, i) where
-  project' context be mkE (a, b, c, d, e, f, g, h, i) =
-    (,,,,,,,,)
-    <$> project' context be mkE a <*> project' context be mkE b <*> project' context be mkE c
-    <*> project' context be mkE d <*> project' context be mkE e <*> project' context be mkE f
-    <*> project' context be mkE g <*> project' context be mkE h <*> project' context be mkE i
-  projectSkeleton' context be mkM =
-    (,,,,,,,,)
-    <$> projectSkeleton' context be mkM
-    <*> projectSkeleton' context be mkM
-    <*> projectSkeleton' context be mkM
-    <*> projectSkeleton' context be mkM
-    <*> projectSkeleton' context be mkM
-    <*> projectSkeleton' context be mkM
-    <*> projectSkeleton' context be mkM
-    <*> projectSkeleton' context be mkM
-    <*> projectSkeleton' context be mkM
+-- 9-tuple ThreadRewritable and ProjectibleWithPredicate instances are
+-- provided by beam-core (beam-914-fork) itself in Database.Beam.Query.Internal
+-- (shape-tagged forms: ThreadRewritable ('STuple '[s1..s9]) …,
+-- ProjectibleWithPredicate ('STuple '[s1..s9]) …). Dropped from here to
+-- avoid instance-arity conflict with the shape-tagged fork.
 
 instance ( BeamBackend be
          , FromBackendRow be a, FromBackendRow be b, FromBackendRow be c

@@ -1,9 +1,8 @@
 module Jenga.Frontend.Consumable where
 
-import Reflex (Reflex, Event, Dynamic)
-import Effectful (Eff, (:>))
-import Reflex.Effectful.Types (KnownTimeline)
-import Reflex.Effectful.Effect.Hold (Hold, holdDyn, foldDyn)
+import Reflex.Class (Reflex, Event, Dynamic, MonadHold, holdDyn)
+import Reflex.Dynamic (foldDyn)
+import Control.Monad.Fix (MonadFix)
 
 type Consumable a = Maybe [a]
 
@@ -15,20 +14,20 @@ justNull = \case
 depleted :: Consumable a -> Bool
 depleted = justNull
 
-holdConsumable :: (Reflex t, Hold t :> es, KnownTimeline es t) => Event t [a] -> Eff es (Dynamic t (Consumable a))
+holdConsumable :: (Reflex t, MonadHold t m) => Event t [a] -> m (Dynamic t (Consumable a))
 holdConsumable e = holdDyn Nothing $ Just <$> e
 
-foldConsumable :: (Reflex t, Hold t :> es, KnownTimeline es t) => Event t [a] -> Eff es (Dynamic t (Consumable a))
+foldConsumable :: (Reflex t, MonadHold t m, MonadFix m) => Event t [a] -> m (Dynamic t (Consumable a))
 foldConsumable e = foldDyn f Nothing e
   where
     f new_ = \case
       Nothing -> Just new_
       Just old -> Just $ old <> new_
 
-dropDyn :: (Reflex t, Hold t :> es, KnownTimeline es t) => Event t () -> [a] -> Eff es (Dynamic t [a])
+dropDyn :: (Reflex t, MonadHold t m, MonadFix m) => Event t () -> [a] -> m (Dynamic t [a])
 dropDyn e xs = foldDyn (\() xs' -> drop 1 xs') xs e
 
-consumeWhen :: (Reflex t, Hold t :> es, KnownTimeline es t) => Event t () -> [a] -> Eff es (Dynamic t (Maybe a))
+consumeWhen :: (Reflex t, MonadHold t m, MonadFix m) => Event t () -> [a] -> m (Dynamic t (Maybe a))
 consumeWhen e xs = (fmap . fmap) f $ dropDyn e xs
   where
     f = \case

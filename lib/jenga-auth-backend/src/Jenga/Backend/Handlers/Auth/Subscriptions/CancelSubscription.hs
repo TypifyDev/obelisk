@@ -4,6 +4,7 @@ module Jenga.Backend.Handlers.Auth.Subscriptions.CancelSubscription where
 
 
 import Jenga.Backend.DB.Auth
+import Jenga.Backend.DB.OrgBased (isOrgOwnedUser)
 import Jenga.Backend.DB.Subscriptions
 import Jenga.Backend.Utils.HasConfig
 import Jenga.Backend.Utils.HasTable
@@ -24,7 +25,8 @@ import Web.Stripe.Customer
 import Web.Stripe.Subscription
 
 import Effectful (Eff, (:>), IOE)
-import Effectful.Reader.Static ()
+import Effectful.Reader.Static (Reader)
+import qualified Effectful.Reader.Static as ER
 
 cancelSubscriptionHandler
   :: forall db cfg es.
@@ -34,24 +36,30 @@ cancelSubscriptionHandler
      , Reader cfg :> es, HasConfig cfg (Pool Connection)
      , HasJengaTable Postgres db StripeRelation
      , HasJengaTable Postgres db Account
+     , HasJengaTable Postgres db OrgOwnedUsers
      )
   => Id Account
   -> Eff es (Either (BackendError CancelSubError) ())
 cancelSubscriptionHandler acctID = do
-  stripeConfig <- asksM @StripeConfig @cfg
+  stripeConfig <- ER.asks (fromCfg :: cfg -> StripeConfig)
 
   (stripeTbl :: PgTable Postgres db StripeRelation) <- asksTableM
   (acctTbl :: PgTable Postgres db Account) <- asksTableM
+  (orgTbl :: PgTable Postgres db OrgOwnedUsers) <- asksTableM
 
   let stripe' = liftIO . stripe stripeConfig
-  maybeStripeRelation <- withDbEnv @cfg $ getStripeInfo stripeTbl acctID
+  maybeStripeRelation <- withDbEnvE @cfg $ getStripeInfo stripeTbl acctID
   case maybeStripeRelation of
     Nothing -> do
-      mEmail <- withDbEnv @cfg $ getUsersEmail acctTbl acctID
+      mEmail <- withDbEnvE @cfg $ getUsersEmail acctTbl acctID
       case mEmail of
         Nothing -> pure $ Left . BCritical $ NoSubOrAccount
         Just _email -> do
-          isBulkPurchaseEmail <- pure False --liftIO $ isPaidForEmail email -- See TODO
+          -- If the user has no Stripe subscription but their account is in the
+          -- OrgOwnedUsers table, they were paid for as part of a bulk /
+          -- group purchase. Cancelling on their own is a user error; the org
+          -- admin must handle it.
+          isBulkPurchaseEmail <- withDbEnvE @cfg $ isOrgOwnedUser orgTbl acctID
           case isBulkPurchaseEmail of
             True -> pure $ Left . BUserError $ SelfCancelUnderGroupPlan
             False -> pure $ Left . BCritical $ NoStripeInfo
@@ -63,7 +71,7 @@ cancelSubscriptionHandler acctID = do
           case eithCancelSub of
             Left e -> pure . Left . BCritical . StripeCouldntCancel $ e
             Right _ -> do
-              withDbEnv @cfg $ recordEndSubscription stripeTbl acctID
+              withDbEnvE @cfg $ recordEndSubscription stripeTbl acctID
               pure $ Right ()
 
   -- get stripe customer id AND subscription id based on acct id

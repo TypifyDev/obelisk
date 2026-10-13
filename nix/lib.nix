@@ -37,24 +37,39 @@ let src = ../.;
         name = "nix-thunk";
         src = nix-thunk-src;
       };
-      compiler-nix-name = "ghc9122";
+      compiler-nix-name = "ghc9141";
       cabalProjectLocal = ''
         allow-newer:
             *:base
           , *:template-haskell
+          , *:logging-effect
+        constraints:
+          any.logging-effect >= 1.4
       '';
       modules = [
-        ({ config, lib, ... }:
-          let optional = lib.filterAttrs (name: _: config.packages ? ${name});
-          in {
-            packages = optional {
-              cli-git.components.library.build-tools = [ haskell-nix-pkgs.git ];
-              cli-nix.components.library.build-tools = [
-                haskell-nix-pkgs.nix-prefetch-git
-                haskell-nix-pkgs.nix
-              ];
-            };
-          })
+        # Declare build-tools overrides unconditionally (no filterAttrs
+        # guard). The filterAttrs pattern `config.packages ? cli-git`
+        # reads config.packages during module eval — which is a fixed-
+        # point. In the nix-haskell WRAPPER flow (common.nix:117-124),
+        # source-repository-packages-driver appends extra modules that
+        # register cli-git in config.packages, so filterAttrs sees it
+        # and keeps our override. In this ISOLATED nix-thunk-project
+        # (direct `haskell-nix.project` call), no such append happens,
+        # so filterAttrs runs when config.packages doesn't yet contain
+        # cli-git and silently drops the override.
+        #
+        # Empirically verified: with filterAttrs guard, cli-git 0.2.0.3
+        # drv had zero references to git binary (nix-store -q). Without
+        # filterAttrs, the packages.cli-git.components.library.build-tools
+        # assignment is a plain module definition that haskell.nix's own
+        # SRP registration will merge into config.packages.cli-git.
+        {
+          packages.cli-git.components.library.build-tools = [ haskell-nix-pkgs.git ];
+          packages.cli-nix.components.library.build-tools = [
+            haskell-nix-pkgs.nix-prefetch-git
+            haskell-nix-pkgs.nix
+          ];
+        }
       ];
     };
     nix-thunk-cli = nix-thunk-project.nix-thunk.components.exes.nix-thunk;
@@ -87,6 +102,14 @@ let src = ../.;
     jenga-command = nix-haskell {
       name = "jenga-command";
       src = src + "/lib/command";
+      extraCabalProject = [ ''
+        allow-newer:
+            *:base
+          , *:template-haskell
+          , *:logging-effect
+        constraints:
+          any.logging-effect >= 1.4
+      '' ];
       overrides = [
         {
           # staticWhich resolves tool paths at compile time (TH splices in library).
@@ -100,6 +123,19 @@ let src = ../.;
             pkgs.openssh
             pkgs.rsync
             nix-thunk-cli
+          ];
+          # jenga-command transitively depends on nix-thunk LIBRARY (via
+          # Nix.Thunk import in Obelisk.App). That nix-thunk-lib pulls in
+          # cli-git 0.2.0.3 from Hackage which has $(staticWhich "git")
+          # at compile time. Without this override the jenga-command
+          # project builds cli-git-0.2.0.3 with NO git in nativeBuildInputs
+          # (empirically observed: drv 74xra3xfbc8aqzd23wdxdx16a80zjm3h)
+          # and staticWhich fails. Same fix applied to nix-thunk-project
+          # at lines 47-65 (that project builds nix-thunk-exe).
+          packages.cli-git.components.library.build-tools = [ pkgs.git ];
+          packages.cli-nix.components.library.build-tools = [
+            pkgs.nix-prefetch-git
+            pkgs.nix
           ];
           # Marker file so Cabal creates the data directory (for getDataDir).
           # Package-level preBuild applies to both lib and exe components.
@@ -191,9 +227,8 @@ in rec {
     monad-tree = src + "/lib/monad-tree";
     ClasshSS = src + "/lib/ClasshSS";
     reflex-classhss = src + "/lib/reflex-classhss";
-    reflex-effectful = src + "/lib/reflex-effectful";
+    reflex-dom-effectful = src + "/lib/reflex-dom-effectful";
     grid-effect = src + "/lib/grid-effect";
-    jenga-route-servant = src + "/lib/jenga-route-servant";
     jenga-backend-servant = {
       src = src + "/lib/jenga-backend-servant";
       condition = "!(arch(javascript) || arch(wasm32))";

@@ -1,3 +1,5 @@
+{-# LANGUAGE DataKinds #-}
+{-# LANGUAGE TypeApplications #-}
 module Jenga.Backend.DB.Emailing where
 
 import Jenga.Backend.Utils.HasTable
@@ -10,6 +12,7 @@ import Rhyolite.Account
 import Database.Beam.Schema
 import Database.Beam.Postgres
 import Database.Beam.Query
+import Database.Beam.Query.Shape (Shape (..))
 import Database.Beam.Backend.SQL.Types -- (SqlSerial(..))
 
 import Data.Functor.Identity
@@ -21,7 +24,7 @@ allUnsubscribed
   :: Database Postgres db
   => PgTable Postgres db Unsubscribe
   -> Pg [Unsubscribe Identity]
-allUnsubscribed = runSelectReturningList . select . all_-- (_db_unsubscribe db)
+allUnsubscribed tbl = runSelectReturningList $ select @'STable $ all_ tbl-- (_db_unsubscribe db)
 
 allUnsubscribedEmails :: Database Postgres db => PgTable Postgres db Unsubscribe -> Pg [T.Text]
 allUnsubscribedEmails tbl = fmap _unsubscribe_email <$> allUnsubscribed tbl
@@ -53,4 +56,4 @@ getUnsentEmails
   :: Database Postgres db
   => PgTable Postgres db SendEmailTask
   -> Pg [SendEmailTask Identity]
-getUnsentEmails = runSelectReturningList . select . all_
+getUnsentEmails tbl = runSelectReturningList $ select @'STable $ all_ tbl

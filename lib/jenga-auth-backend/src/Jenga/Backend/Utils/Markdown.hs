@@ -33,11 +33,14 @@ reMergeCodeBlocks (block:blocks) =
   then block : reMergeCodeBlocks blocks
   else
     case span (not . T.isPrefixOf "```") blocks of
-      (_, [])                -> [block] -- no closing fence; treat rest as opening only
-      (consumed, terminator:left) ->
+      (consumed, terminator : left) ->
         let consumed' = removeTrailingSpaces <$> consumed
-            newBlock  = block : consumed' <> [terminator]
+            newBlock = block : consumed' <> [terminator]
         in (T.intercalate (T.singleton '\n') newBlock) : reMergeCodeBlocks left
+      (consumed, []) ->
+        let consumed' = removeTrailingSpaces <$> consumed
+            newBlock = block : consumed'
+        in [T.intercalate (T.singleton '\n') newBlock]
 
 removeTrailingSpaces :: T.Text -> T.Text
 removeTrailingSpaces = T.reverse . T.dropWhile (== ' ') . T.reverse

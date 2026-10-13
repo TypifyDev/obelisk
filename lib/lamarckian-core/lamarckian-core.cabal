@@ -45,7 +45,9 @@ library
     build-depends:    base
                     , base16-bytestring
                     , jenga-route
-                    , reflex-dom-core
+                    , reflex
+                    , reflex-dom-core-effectful
+                    , effectful-core
                     , IStr
                     , filepath
                     --, unix-compat

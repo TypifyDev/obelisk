@@ -1,104 +1,98 @@
-{-# LANGUAGE CPP #-}
+{-# LANGUAGE ConstraintKinds #-}
 {-# LANGUAGE DataKinds #-}
-{-# LANGUAGE DefaultSignatures #-}
-{-# LANGUAGE DeriveFunctor #-}
-{-# LANGUAGE FlexibleContexts #-}
-{-# LANGUAGE FlexibleInstances #-}
-{-# LANGUAGE GeneralizedNewtypeDeriving #-}
-{-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE GADTs #-}
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE PackageImports #-}
-{-# LANGUAGE RankNTypes #-}
-{-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeOperators #-}
-{-# LANGUAGE UndecidableInstances #-}
 
-module Jenga.Frontend.Cookie where
+-- | Cookie access as an Effectful effect.
+--
+-- Honest port of the previous MTL 'HasCookies' class. The MTL surface
+-- (class + 'CookiesT' newtype transformer + instances for every
+-- MTL transformer) is deleted; the transformers it wrapped
+-- (BehaviorWriterT, DynamicWriterT, EventWriterT, PostBuildT, QueryT,
+-- ReaderT, RequesterT, RouteToUrlT, SetRouteT, StaticDomBuilderT,
+-- TriggerEventT, RoutedT, ConfigsT, HydrationDomBuilderT) do not exist
+-- in the effectful port.
+--
+-- Consumers previously written against @HasCookies m@ should switch to
+-- the @CookiesEff :> es@ constraint from
+-- 'Jenga.Frontend.Effectful.Cookies', re-exported here.
+module Jenga.Frontend.Cookie
+  ( CookiesEff (..)
+  , Cookies
+  , askCookies
+  , runCookies
+  , readCookiesFromDocument
+  -- * Upstream MTL surface — Eff-shape ports
+  , HasCookies
+  , CookiesT
+  , runCookiesT
+  , mapCookies
+  ) where
 
-import Control.Monad.Fix
-import Control.Monad.Primitive
-import Control.Monad.Ref
-import Control.Monad.IO.Class
-import Control.Monad.Trans.Class
-import Control.Monad.Trans.Reader
-import Data.Text.Encoding (encodeUtf8)
-import Reflex
-import Reflex.Host.Class
-import Reflex.Dom.Core
-import "ghcjs-dom" GHCJS.DOM.Document (getCookie, Document)
-import GHCJS.DOM.Types (MonadJSM)
-import Web.Cookie
+import           Data.Kind                              (Constraint)
+import           Data.Text.Encoding                     (encodeUtf8)
+import qualified Effectful                              as Eff
+import           Effectful                              (Eff, (:>))
+import qualified Effectful.Dispatch.Dynamic             as ED
+import           "ghcjs-dom" GHCJS.DOM.Document          (getCookie)
+import qualified GHCJS.DOM                              as DOM
+import           Web.Cookie                             (parseCookies)
 
-import Jenga.Configs
-import Jenga.Route.Frontend
+import           Reflex.Effectful.DomHost                (JSM', liftJSM)
 
-class Monad m => HasCookies m where
-  askCookies :: m Cookies
-  default askCookies :: (HasCookies m', m ~ t m', MonadTrans t) => m Cookies
-  askCookies = lift askCookies
+import           Jenga.Frontend.Effectful.Cookies
 
-instance HasCookies m => HasCookies (BehaviorWriterT t w m)
-instance HasCookies m => HasCookies (DynamicWriterT t w m)
-instance HasCookies m => HasCookies (EventWriterT t w m)
-instance HasCookies m => HasCookies (PostBuildT t m)
-instance HasCookies m => HasCookies (QueryT t q m)
-instance HasCookies m => HasCookies (ReaderT r m)
-instance HasCookies m => HasCookies (RequesterT t request response m)
-instance HasCookies m => HasCookies (RouteToUrlT t m)
-instance HasCookies m => HasCookies (SetRouteT t r m)
-instance HasCookies m => HasCookies (StaticDomBuilderT t m)
-instance HasCookies m => HasCookies (TriggerEventT t m)
-instance HasCookies m => HasCookies (RoutedT t r m)
-instance HasCookies m => HasCookies (ConfigsT m)
-instance HasConfigs m => HasConfigs (CookiesT m)
+-- | Read cookies from the current document via JSaddle. Intended to be
+-- called once at boot; the result is typically fed into 'runCookies' to
+-- install the 'CookiesEff' interpreter for the widget tree.
+readCookiesFromDocument :: JSM' :> es => Eff.Eff es Cookies
+readCookiesFromDocument = liftJSM $ do
+  mdoc <- DOM.currentDocument
+  case mdoc of
+    Nothing -> pure []
+    Just doc -> do
+      raw <- getCookie doc
+      pure $ parseCookies (encodeUtf8 raw)
 
-newtype CookiesT m a = CookiesT { unCookiesT :: ReaderT Cookies m a }
-  deriving
-    ( Functor
-    , Applicative
-    , DomBuilder t
-    , Monad
-    , MonadFix
-    , MonadHold t
-    , MonadIO
-#ifndef ghcjs_HOST_OS
-    , MonadJSM
-#endif
-    , MonadRef
-    , MonadReflexCreateTrigger t
-    , MonadSample t
-    , MonadTrans
-    , NotReady t
-    , PerformEvent t
-    , PostBuild t
-    , Prerender t
-    , TriggerEvent t
-    , HasDocument
-    )
+-- ==================================================================
+-- Upstream MTL surface — Eff-shape ports (source-compat aliases +
+-- one new function via 'interpose').
+-- ==================================================================
 
-instance Adjustable t m => Adjustable t (CookiesT m) where
-  runWithReplace a e = CookiesT $ runWithReplace (unCookiesT a) (unCookiesT <$> e)
-  traverseDMapWithKeyWithAdjust f m e = CookiesT $ traverseDMapWithKeyWithAdjust (\k v -> unCookiesT $ f k v) m e
-  traverseIntMapWithKeyWithAdjust f m e = CookiesT $ traverseIntMapWithKeyWithAdjust (\k v -> unCookiesT $ f k v) m e
-  traverseDMapWithKeyWithAdjustWithMove f m e = CookiesT $ traverseDMapWithKeyWithAdjustWithMove (\k v -> unCookiesT $ f k v) m e
+-- | Constraint-alias form of upstream 'HasCookies m'. Upstream's class
+-- had one method — 'askCookies' — so the direct Effectful analog is
+-- simply @'CookiesEff' :> es@ (the effect being in the row).
+type HasCookies (es :: [Eff.Effect]) = (CookiesEff :> es :: Constraint)
 
-instance PrimMonad m => PrimMonad (CookiesT m) where
-  type PrimState (CookiesT m) = PrimState m
-  primitive = lift . primitive
+-- | Source-compat alias for consumers written against upstream's
+-- 'CookiesT' monad transformer. Effectful has no per-effect transformer
+-- — the effect *row* is the equivalent — but pinning the name to the
+-- effect constructor lets grep and manual porting find the analog
+-- without hunting.
+type CookiesT = CookiesEff
 
-runCookiesT
-  :: Cookies
-  -> CookiesT m a
-  -> m a
-runCookiesT cs child = runReaderT (unCookiesT child) cs
+-- | Source-compat alias for 'runCookies'. Upstream's 'runCookiesT'
+-- takes 'Cookies' and discharges the transformer; Effectful's
+-- 'runCookies' takes 'Cookies' and interprets the effect. Same shape.
+runCookiesT :: Cookies -> Eff (CookiesEff : es) a -> Eff es a
+runCookiesT = runCookies
 
-instance Monad m => HasCookies (CookiesT m) where
-  askCookies = CookiesT ask
-
-mapCookiesT
-  :: (forall x. m x -> n x)
-  -> CookiesT m a
-  -> CookiesT n a
-mapCookiesT f (CookiesT x) = CookiesT $ mapReaderT f x
-
-instance (MonadJSM m, RawDocument (DomBuilderSpace (HydrationDomBuilderT s t m)) ~ Document) => HasCookies (HydrationDomBuilderT s t m) where
-  askCookies = fmap (parseCookies . encodeUtf8) $ getCookie =<< askDocument
+-- | Effectful port of upstream 'mapCookiesT'. Transform the ambient
+-- 'Cookies' value seen by every 'askCookies' call inside the wrapped
+-- action, without re-interpreting the whole effect. Implemented via
+-- 'ED.interpose' — the outer interpreter still governs anything not
+-- overridden here.
+--
+-- Not exactly upstream's shape (upstream's operates on the inner monad
+-- via 'mapReaderT'); this is the direct Effectful equivalent of what
+-- callers typically want: a lens-style transformer over the ambient
+-- state.
+mapCookies
+  :: CookiesEff :> es
+  => (Cookies -> Cookies)
+  -> Eff es a
+  -> Eff es a
+mapCookies f = ED.interpose $ \_ -> \case
+  AskCookies -> f <$> askCookies

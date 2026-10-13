@@ -1,3 +1,5 @@
+{-# LANGUAGE DataKinds #-}
+{-# LANGUAGE TypeApplications #-}
 module Jenga.Backend.DB.LogItems where
 
 -- import Backend.DB (db)
@@ -8,6 +10,7 @@ import Jenga.Common.Schema
 
 import Database.Beam.Schema
 import Database.Beam.Query
+import Database.Beam.Query.Shape (Shape (..))
 import Database.Beam.Postgres
 import Control.Monad.IO.Class
 import Data.Functor.Identity
@@ -17,7 +20,7 @@ getUnreportedUrgentLogItems
   :: Database Postgres db
   => PgTable Postgres db LogItemRow
   -> Pg [LogItemRow Identity]
-getUnreportedUrgentLogItems tbl = runSelectReturningList $ select $ do
+getUnreportedUrgentLogItems tbl = runSelectReturningList $ select @'STable $ do
   filter_
     (\logItemR -> _logItemRow_hasBeenSent logItemR ==. (val_ False)
                   &&. _logItemRow_isUrgent logItemR ==. (val_ True)
@@ -31,7 +34,7 @@ getNonUrgentLogItems
 getNonUrgentLogItems tbl since = do
   t <- liftIO getCurrentTime
   let sinceUtc = addUTCTime (- (abs since)) t
-  runSelectReturningList $ select $ do
+  runSelectReturningList $ select @'STable $ do
     --all_ (_db_reporting db)
     filter_
       (\logItemR ->

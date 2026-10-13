@@ -6,14 +6,13 @@
 -- 'Show' instances and the @IStr@ quasi-quoter for interpolation.
 -- Arguments are formatted via 'Show', so 'String' values get
 -- Haskell-style double-quoted escaping.
+{-# LANGUAGE DataKinds #-}
+{-# LANGUAGE TypeOperators #-}
+{-# LANGUAGE TypeApplications #-}
 module Lamarckian.JS where
 
-import Lamarckian.Render
 import Lamarckian.Types
-import Reflex.Dom.Core
-import Control.Monad
-import Control.Monad.IO.Class
-import qualified Data.Text as T
+import qualified Data.ByteString as BS
 import qualified Data.Text.Encoding as T
 
 
@@ -95,24 +94,15 @@ js9 func a b c d e f g h i = JSFunc [istr| #{func}#{(a, b, c, d, e, f, g, h, i)}
 
 type DomID = String
 
--- | Pre-render a list of 'StaticWidget'' values to 'ByteString', then wrap each
--- as a @setChild(domId, \"<html>...\")@ JS call.
-staticDynamicDOM :: MonadIO m => DomID -> [StaticWidget' r x a] -> m [JSFunc]
-staticDynamicDOM domId widgets = liftIO $ forM widgets $ \w -> do
-  x <- runStaticWidget w
-  let html = T.decodeUtf8 x 
-  pure $ js2 "setChild" domId html
+-- | Wrap a list of already-rendered HTML fragments as
+-- @setChild(domId, \"<html>...\")@ JS calls.
+--
+-- Callers pre-render each 'StaticWidgetE' with 'runStaticWidget' before
+-- passing the resulting ByteStrings in — a list of rank-2 widgets
+-- cannot be expressed directly as @[StaticWidgetE ()]@ because the
+-- element type is polymorphic (GHC forbids impredicative list
+-- elements).
+staticDynamicDOM :: DomID -> [BS.ByteString] -> [JSFunc]
+staticDynamicDOM domId rendered =
+  [ js2 "setChild" domId (T.decodeUtf8 x) | x <- rendered ]
 
--- | Like 'staticDynamicDOM' but uses @setChildToggle(domId, index, \"<html>...\")@,
--- where @index@ is the 1-based position in the list.
-staticDynWithToggle :: MonadIO m => DomID -> [StaticWidget' r x a] -> m [JSFunc]
-staticDynWithToggle domId widgets = liftIO $ forM (zip [(1::Int)..] widgets) $ \(n,widget) -> do
-  html <- T.decodeUtf8 <$> runStaticWidget widget
-  pure $ js3 "setChildToggle" domId n html 
-
-type OnClick = JSFunc
-
--- | Render a @\<button\>@ element with the given label and an @onClick@ attribute
--- set to the provided 'JSFunc' call string.
-simpleButton :: DomBuilder t m => T.Text -> JSFunc -> m ()
-simpleButton label (JSFunc onClick) = elAttr "button" ("onClick" =: T.pack onClick) $ text label

@@ -1,268 +1,455 @@
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE ConstraintKinds #-}
+{-# LANGUAGE DataKinds #-}
 {-# LANGUAGE FlexibleContexts #-}
-{-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE GADTs #-}
+{-# LANGUAGE KindSignatures #-}
 {-# LANGUAGE LambdaCase #-}
-{-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE PackageImports #-}
 {-# LANGUAGE RankNTypes #-}
-{-# LANGUAGE RecursiveDo #-}
 {-# LANGUAGE ScopedTypeVariables #-}
-{-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeOperators #-}
-{-# LANGUAGE UndecidableInstances #-}
 
+-- | Effectful-only surface of the legacy 'Jenga.Frontend' module,
+-- plus the 'Frontend' / 'FrontendMode' / 'renderFrontendHtml' surface
+-- absorbed from the former @jenga-route-servant@ package.
 module Jenga.Frontend
-  ( JengaWidget
-  , Frontend (..)
+  ( -- * Frontend type
+    Frontend(..)
+  , FrontendMode(..)
+  , FrontendWidget
+
+    -- * Server-side rendering
+  , renderFrontendHtml
+  , injectExecutableConfigs
+
+    -- * DOM utilities
+  , baseTag
+  , removeHTMLConfigs
+  , nodeListNodes
+
+    -- * Upstream MTL surface — Eff-shape ports
+  , ObeliskWidget
+  , PrebuildAgnostic
+  , FrontendWidgetT
+  , setInitialRoute
   , runFrontend
   , runFrontendWithConfigsAndCurrentRoute
-  , renderFrontendHtml
-  , removeHTMLConfigs
-  , FrontendMode (..)
-  , FrontendWidgetT
+
   , module Jenga.Frontend.Cookie
   ) where
 
+import           Control.Monad                           (when)
+import           Control.Monad.Fix                       (MonadFix)
+import           Control.Monad.IO.Class                  (MonadIO, liftIO)
+import           Data.ByteString                         (ByteString)
+import qualified Data.ByteString.Base64                  as B64
+import           Data.Foldable                           (for_)
+import           Data.Kind                               (Constraint, Type)
+import           Data.Map                                (Map)
+import qualified Data.Map                                as Map
+import           Data.Maybe                              (catMaybes)
+import qualified Data.Proxy                              as P
+import           Data.Text                               (Text)
+import qualified Data.Text                               as T
+import qualified Data.Text.Encoding                      as TE
+import           Effectful                               (Eff, Effect, IOE, (:>))
+import qualified Effectful.Dispatch.Dynamic              as ED
+import qualified GHCJS.DOM                               as DOM
+import           "ghcjs-dom" GHCJS.DOM.Document          (getHead)
+import qualified GHCJS.DOM.History                       as History
+import qualified GHCJS.DOM.Location                      as Location
+import           GHCJS.DOM.Node                          (Node, removeChild_)
+import           GHCJS.DOM.NodeList                      (IsNodeList, getLength, item)
+import           GHCJS.DOM.ParentNode                    (querySelectorAll)
+import           GHCJS.DOM.Types                         (JSM)
+import qualified GHCJS.DOM.Window                        as Window
+import qualified Language.Javascript.JSaddle             as JSaddle
+import qualified Network.URI                             as URI
+import           System.Info                             (os)
 
-#ifdef __GLASGOW_HASKELL__
-#if __GLASGOW_HASKELL__ < 810
-import Data.Monoid ((<>))
-#endif
-#if __GLASGOW_HASKELL__ >= 906
-import Control.Monad (when)
-import Data.Functor (void)
-#endif
-#endif
-
-import Prelude hiding ((.))
-
-import Control.Category
-import Control.Lens
-import Control.Monad.Fix
-import Control.Monad.IO.Class
-import Control.Monad.Primitive
-import Control.Monad.Reader
-import Control.Monad.Ref
-import Control.Monad.Trans.Maybe (MaybeT(..), runMaybeT)
-import Data.ByteString (ByteString)
-import Data.Foldable (for_)
-import Data.Map (Map)
-import Data.Maybe (catMaybes)
-import Data.Text (Text)
-import qualified Data.Text as T
-import qualified GHCJS.DOM as DOM
-import qualified GHCJS.DOM.Types as DOM
-import qualified GHCJS.DOM.History as DOM
-import qualified GHCJS.DOM.Window as DOM
-import Language.Javascript.JSaddle (MonadJSM, JSM, jsNull)
-import GHCJS.DOM (currentDocument)
-import "ghcjs-dom" GHCJS.DOM.Document (getHead)
-import GHCJS.DOM.Node (Node, removeChild_)
-import GHCJS.DOM.NodeList (IsNodeList, item, getLength)
-import GHCJS.DOM.ParentNode (querySelectorAll)
-import Jenga.Frontend.Cookie
-import Jenga.Route.Frontend
-import Reflex.Dom.Core
-import Reflex.Host.Class
-import Jenga.Configs
-import Jenga.ExecutableConfig.Inject (injectExecutableConfigs)
-import qualified Jenga.ExecutableConfig.Lookup as Lookup
-import System.Info (os)
-import Web.Cookie
-
-type JengaWidget t route m =
-  ( DomBuilder t m
-  , MonadFix m
-  , MonadHold t m
-  , MonadSample t (Performable m)
-  , MonadReflexCreateTrigger t m
-  , PostBuild t m
-  , PerformEvent t m
-  , TriggerEvent t m
-  , HasDocument m
-  , MonadRef m
-  , Ref m ~ Ref IO
-  , MonadRef (Performable m)
-  , Ref (Performable m) ~ Ref IO
-  , MonadFix (Performable m)
-  , PrimMonad m
-  , Prerender t m
-  , PrebuildAgnostic t route m
-  , PrebuildAgnostic t route (Client m)
-  , HasConfigs m
-  , HasCookies m
-  , MonadIO (Performable m)
+import qualified Reflex.Class                            as R
+import qualified Reflex.Host.HeadlessEffectful           as HH
+import qualified Reflex.Host.Class                       as RH
+import qualified Reflex.Effectful.DomHost                as DH
+import           Reflex.Effectful.DomHost
+  ( DomBuilderE
+  , DomBuilderSpaceE
+  , DomBuilderTimelineE
+  , DomSpace
+  , HasDocumentE
+  , HasPrerender
+  , JSM'
+  , liftJSM
+  , el
+  , elAttr
+  , text
+  , blank
+  , renderStatic
   )
 
-type PrebuildAgnostic t route m =
-  ( SetRoute t route m
-  , RouteToUrl route m
-  , MonadFix m
-  , HasConfigs m
-  , HasConfigs (Performable m)
+import           Jenga.Frontend.Cookie
+import           Jenga.Frontend.Effectful.Configs        (Configs, runConfigs)
+import           Jenga.Route.Effect
+  ( Routed(..)
+  , SetRoute(..)
+  , RouteToUrl(..)
+  , setAdaptedUriPath
+  )
+import qualified Jenga.Route.Frontend                    as Routing
+import qualified Jenga.Route.Servant                     as Servant
+
+-- ─── Frontend type ─────────────────────────────────────────────
+
+-- | Constraint bag required by a frontend widget.
+--
+-- Same shape whether the widget is being run through the SSR
+-- 'renderStatic' path (space @~ StaticDomSpace@) or the client-side
+-- 'mainWidget'/hydration path (space @~ GhcjsDomSpace@ /
+-- @HydrationDomSpace@). Browser-only work goes inside 'prerender' via
+-- 'HasPrerender', which supplies 'JSM'@ / 'DomBuilderE' etc. inside the
+-- client branch's effect row.
+type FrontendWidget (es :: [Effect]) (t :: Type) (r :: Type) =
+  ( R.Reflex t
+  , t ~ DomBuilderTimelineE es
+  , DomBuilderE t (DomBuilderSpaceE es) :> es
+  , HasDocumentE (DomBuilderSpaceE es) :> es
+  , DomSpace (DomBuilderSpaceE es)
+  , HH.Hold t :> es
+  , HH.Sample t :> es
+  , HH.CreateTrigger t :> es
+  , HH.PostBuild t :> es
+  , HH.TriggerEvent t :> es
+  , HH.NotReady t :> es
+  , HH.Adjustable t :> es
+  , HH.PerformEventM (RH.HostFrame t) t :> es
+  , IOE :> es
+  , HasPrerender t (DomBuilderSpaceE es) es
+  , Routed t r :> es
+  , SetRoute t r :> es
+  , RouteToUrl r :> es
+  , Configs :> es
+  , CookiesEff :> es
   )
 
-data Frontend route = Frontend
-  { _frontend_head :: !(forall t m. JengaWidget t route m => RoutedT t route m ())
-  , _frontend_body :: !(forall t m. JengaWidget t route m => RoutedT t route m ())
+-- | The frontend of a Jenga application.
+--
+-- Holds the head and body widgets as effectful computations
+-- polymorphic over the effect row and Reflex timeline.
+data Frontend r = Frontend
+  { _frontend_head :: !(forall (es :: [Effect]) (t :: Type).
+      FrontendWidget es t r => Eff es ())
+  , _frontend_body :: !(forall (es :: [Effect]) (t :: Type).
+      FrontendWidget es t r => Eff es ())
   }
 
-baseTag :: forall route t m. JengaWidget t route m => RoutedT t route m ()
+-- | Controls how the frontend renders.
+data FrontendMode = FrontendMode
+  { _frontendMode_hydrate :: !Bool
+    -- ^ Hydrate existing SSR'd DOM instead of building from scratch
+  , _frontendMode_adjustRoute :: !Bool
+    -- ^ Use hash-based routing (for platforms without ambient URLs)
+  } deriving (Show, Eq)
+
+-- ─── Server-side rendering (SSR) ──────────────────────────────
+
+-- | Render the frontend to an HTML shell for the initial page load.
+--
+-- Composes @head@ + @body@ inside @<html>@, threads all the frontend
+-- effects (Configs, CookiesEff, Routed, SetRoute, RouteToUrl) through
+-- static interpreters, and drives 'renderStatic' from
+-- 'Reflex.Effectful.DomHost' to produce the HTML bytestring.
+--
+-- Upstream parity:
+--
+--   * 'renderStatic' + 'runCookies' + 'runConfigs' + 'runRouteToUrl' +
+--     'runSetRoute' + 'runRouted' with @pure route@ mirrors upstream
+--     @Obelisk.Frontend.renderFrontendHtml@ (obelisk\/lib\/frontend).
+--   * @<!DOCTYPE html>@ prefix, @<html>@ wrapper, @<head>@ + @<body>@
+--     child tags emitted the same way.
+--   * 'injectExecutableConfigs' emits @<script>@ tags carrying the
+--     base64-encoded config map with the
+--     @data-jenga-executable-config-inject-key@ attribute so
+--     'removeHTMLConfigs' can strip them during hydration bootstrap.
+renderFrontendHtml
+  :: forall m r.
+     MonadIO m
+  => Map Text ByteString        -- ^ Configs
+  -> [(ByteString, ByteString)] -- ^ Cookies
+  -> (r -> Text)                -- ^ Route encoder
+  -> r                          -- ^ Current route
+  -> Frontend r
+  -> (forall es t. FrontendWidget es t r => Eff es ())
+    -- ^ Extra head content, appended after 'frontend_head'
+  -> (forall es t. FrontendWidget es t r => Eff es ())
+    -- ^ Extra body content, appended after 'frontend_body'
+  -> m ByteString
+renderFrontendHtml configs cookies urlEnc route frontend headExtra bodyExtra = do
+  (_, html) <- liftIO $ renderStatic $
+    runCookies cookies $
+      runConfigs configs $
+        runRouteToUrlStatic urlEnc $
+          runSetRouteStatic @DH.StaticDomTimeline @r $
+            runRoutedStatic @DH.StaticDomTimeline @r (R.constDyn route) $
+              el "html" $ do
+                el "head" $ do
+                  baseTag
+                  injectExecutableConfigs configs
+                  _frontend_head frontend @_ @DH.StaticDomTimeline
+                  headExtra @_ @DH.StaticDomTimeline
+                el "body" $ do
+                  _frontend_body frontend @_ @DH.StaticDomTimeline
+                  bodyExtra @_ @DH.StaticDomTimeline
+  pure $ "<!DOCTYPE html>" <> html
+
+-- | Emit one @<script data-jenga-executable-config-inject-key=…>@ tag
+-- per config entry, carrying the base64-encoded config value in its
+-- text content. Mirrors upstream 'Obelisk.ExecutableConfig.Inject'
+-- with a jenga-namespaced attribute so 'removeHTMLConfigs' can locate
+-- and strip them on hydrate.
+--
+-- Widget-side (goes through 'DomBuilderE'), so hydration walks it as
+-- part of the head DOM.
+injectExecutableConfigs
+  :: forall es t
+   . ( R.Reflex t
+     , t ~ DomBuilderTimelineE es
+     , DomBuilderE t (DomBuilderSpaceE es) :> es
+     , DomSpace (DomBuilderSpaceE es)
+     )
+  => Map Text ByteString
+  -> Eff es ()
+injectExecutableConfigs configs = for_ (Map.toList configs) $ \(k, v) ->
+  elAttr "script"
+    ( Map.fromList
+        [ ("type",                                       "text/plain")
+        , ("data-jenga-executable-config-inject-key",    k)
+        , ("data-hydration-skip",                        "")
+        ]
+    ) $ text $ TE.decodeUtf8 $ B64.encode v
+
+-- ─── Static route interpreters ─────────────────────────────────
+
+-- | SSR interpreter for 'Routed': every 'askRoute' returns the same
+-- @Dynamic t r@ supplied at the outer boundary. Upstream analog is
+-- @runRoutedT@ applied to a constant @Dynamic@.
+runRoutedStatic
+  :: R.Dynamic t r
+  -> Eff (Routed t r : es) a
+  -> Eff es a
+runRoutedStatic d = ED.interpret_ $ \case
+  AskRoute -> pure d
+
+-- | SSR interpreter for 'SetRoute': every 'setRoute' / 'modifyRoute'
+-- event is discarded. Server-side rendering emits one HTML snapshot;
+-- there is no navigation to react to.
+runSetRouteStatic
+  :: forall t r es a
+   . Eff (SetRoute t r : es) a
+  -> Eff es a
+runSetRouteStatic = ED.interpret_ $ \case
+  SetRoute    _ -> pure ()
+  ModifyRoute _ -> pure ()
+
+-- | SSR interpreter for 'RouteToUrl': every 'askRouteToUrl' returns
+-- the encoder function supplied at the outer boundary.
+runRouteToUrlStatic
+  :: (r -> Text)
+  -> Eff (RouteToUrl r : es) a
+  -> Eff es a
+runRouteToUrlStatic enc = ED.interpret_ $ \case
+  AskRouteToUrl -> pure enc
+
+-- ─── DOM utilities ─────────────────────────────────────────────
+
+-- | Emit @<base href=\"/\">@ except on iOS.
+baseTag
+  :: forall es
+   . ( R.Reflex (DomBuilderTimelineE es)
+     , DomBuilderE (DomBuilderTimelineE es) (DomBuilderSpaceE es) :> es
+     , DomSpace (DomBuilderSpaceE es)
+     )
+  => Eff es ()
 baseTag =
   if os == "ios"
     then blank
-    else elAttr "base" ("href" =: "/") blank --TODO: Figure out the base URL from the routes
+    else elAttr "base" (Map.singleton ("href" :: Text) ("/" :: Text)) blank
 
-removeHTMLConfigs :: JSM ()
-removeHTMLConfigs = void $ runMaybeT $ do
-  doc <- MaybeT currentDocument
-  hd <- MaybeT $ getHead doc
-  es <- nodeListNodes =<< querySelectorAll hd ("[data-jenga-executable-config-inject-key]" :: Text)
-  for_ es $ removeChild_ hd
+-- | Remove the executable-config @<script>@ tags that were injected
+-- into the SSR'd @<head>@. Called once during hydration bootstrap so
+-- the runtime doesn't re-observe them as duplicates.
+removeHTMLConfigs :: JSM' :> es => Eff es ()
+removeHTMLConfigs = liftJSM $ do
+  mdoc <- DOM.currentDocument
+  case mdoc of
+    Nothing  -> pure ()
+    Just doc -> do
+      mhd <- getHead doc
+      case mhd of
+        Nothing -> pure ()
+        Just hd -> do
+          nl <- querySelectorAll hd ("[data-jenga-executable-config-inject-key]" :: Text)
+          nodes <- collectNodesJSM nl
+          for_ nodes $ removeChild_ hd
 
--- | Collect all nodes in the node list.
---
--- TODO: this and the version in exe-config/ghcjs/lookup should be
--- upstreamed to jsaddle.
-nodeListNodes :: (IsNodeList l, MonadJSM m) => l -> m [Node]
-nodeListNodes es = do
+-- | JSM-side helper (used by 'removeHTMLConfigs').
+collectNodesJSM :: IsNodeList l => l -> JSM [Node]
+collectNodesJSM es = do
   len <- getLength es
-  -- Warning! len is unsigned. If the NodeList is empty, we must avoid
-  -- accidentally traversing over [0..maxBound::Word]
-  nodes <- traverse (item es) $ if len == 0 then [] else [0..len-1]
-  pure $ catMaybes nodes
+  -- 'len' is unsigned; guard against traversing [0..maxBound] on an empty list.
+  ns <- traverse (item es) $ if len == 0 then [] else [0 .. len - 1]
+  pure $ catMaybes ns
 
-setInitialRoute :: Bool -> JSM ()
-setInitialRoute useHash = do
+-- | Collect all nodes in a 'NodeList' into a Haskell list.
+nodeListNodes
+  :: (IsNodeList l, JSM' :> es)
+  => l
+  -> Eff es [Node]
+nodeListNodes = liftJSM . collectNodesJSM
+
+
+-- ==================================================================
+-- Upstream MTL surface — Eff-shape ports
+-- ==================================================================
+
+-- | Alias for 'FrontendWidget' — the port's constraint bundle for
+-- frontend widgets. Direct rename of upstream's @ObeliskWidget t route m@
+-- (which was itself a ConstraintKinds bundle of DomBuilder / MonadFix /
+-- Prerender / PostBuild / SetRoute / RouteToUrl / HasConfigs / HasCookies
+-- etc.). Effectful equivalent bundles the same capabilities as effects
+-- in the row.
+type ObeliskWidget es t r = (FrontendWidget es t r :: Constraint)
+
+-- | Effectful port of upstream 'PrebuildAgnostic' — the sub-bundle of
+-- 'ObeliskWidget' that does NOT require DOM-builder capability
+-- (i.e. computations that run identically pre- and post-build):
+-- routing writers + config reader + MonadFix.
+type PrebuildAgnostic es t r =
+  ( SetRoute t r :> es
+  , RouteToUrl r :> es
+  , Configs :> es
+  , MonadFix (Eff es)
+  ) :: Constraint
+
+-- | Effectful port of upstream 'FrontendWidgetT' — the concrete widget
+-- shape used by 'renderFrontendHtml' (SSR path). Upstream's version was
+-- a nine-deep transformer stack: @RoutedT DomTimeline r (SetRouteT ...
+-- (RouteToUrlT ... (ConfigsT (CookiesT ... (StaticDomBuilderT DomTimeline
+-- (PerformEventT DomTimeline DomHost)))))@. The Effectful equivalent is
+-- a rank-1 quantified 'Eff' action whose row satisfies 'FrontendWidget'
+-- — same semantics without threading a nine-layer transformer.
+type FrontendWidgetT r =
+  forall es t. FrontendWidget es t r => Eff es ()
+
+-- ─── setInitialRoute ─────────────────────────────────────────────
+
+-- | Set the browser's history state to the current URL adapted for the
+-- routing mode. Called once at client boot when the mode uses hash
+-- routing so the shipped URL matches what the router will decode.
+--
+-- Direct Eff port of upstream @Obelisk.Frontend.setInitialRoute@; the
+-- 'getLocationUri' upstream helper is inlined here (reads protocol /
+-- authority / pathname / search / hash off @window.location@ and
+-- assembles a 'URI.URI').
+setInitialRoute :: JSM' :> es => Bool -> Eff es ()
+setInitialRoute useHash = liftJSM $ do
   window <- DOM.currentWindowUnchecked
-  initialLocation <- DOM.getLocation window
-  initialUri <- getLocationUri initialLocation
-  history <- DOM.getHistory window
-  DOM.replaceState history jsNull ("" :: Text) $ Just $
+  location <- Window.getLocation window
+  initialUri <- getLocationUriJSM location
+  history <- Window.getHistory window
+  History.replaceState history JSaddle.jsNull ("" :: Text) $ Just $
     show $ setAdaptedUriPath useHash "/" initialUri
 
-data FrontendMode = FrontendMode
-  { _frontendMode_hydrate :: Bool
-    -- ^ There is already a rendering of the DOM in place; hydrate it rather
-    -- than building new DOM
-  , _frontendMode_adjustRoute :: Bool
-    -- ^ The page can't use regular routes, so encode routes into the hash
-    -- instead
-  }
+-- | Inlined port of upstream @Reflex.Dom.Location.getLocationUri@ —
+-- reads five 'Location' properties and assembles a 'URI.URI'.
+-- Private helper used only by 'setInitialRoute'.
+getLocationUriJSM :: Location.Location -> JSM URI.URI
+getLocationUriJSM location = URI.URI
+  <$> (T.unpack <$> Location.getProtocol location)
+  <*> (Just <$> getLocationUriAuthJSM location)
+  <*> (T.unpack <$> Location.getPathname location)
+  <*> (T.unpack <$> Location.getSearch location)
+  <*> (T.unpack <$> Location.getHash location)
 
--- | Run the frontend, setting the initial route to "/" on platforms where no
--- route exists ambiently in the context (e.g. anything but web).
--- Selects FrontendMode based on platform; this doesn't work for jsaddle-warp
+-- | Inlined port of upstream @Reflex.Dom.Location.getLocationUriAuth@.
+getLocationUriAuthJSM :: Location.Location -> JSM URI.URIAuth
+getLocationUriAuthJSM location = do
+  host <- Location.getHostname location
+  port <- Location.getPort location
+  let appendColonIfNotEmpty x
+        | T.null x  = ""
+        | otherwise = ":" <> T.unpack x
+  pure $ URI.URIAuth
+    ""
+    (T.unpack host)
+    (appendColonIfNotEmpty port)
+
+-- ─── runFrontend + runFrontendWithConfigsAndCurrentRoute ────────
+
+-- | Client-side boot entry — Eff port of upstream
+-- @Obelisk.Frontend.runFrontend@. Composes the effect interpreter stack
+-- (Configs / CookiesEff / Routed / SetRoute / RouteToUrl via
+-- 'Routing.runBrowserRoutingWith') around the frontend body and drives
+-- 'DH.mainWidget'.
+--
+-- Signature diverges from upstream in one place: takes an explicit
+-- 'Servant.HasRoute' proxy + fallback route (jenga's routing pattern)
+-- rather than an @Encoder@ + typed obelisk route. Selects the
+-- 'FrontendMode' from the current platform (GHCJS = hydrate + no hash;
+-- JSaddle-warp = immediate + hash).
 runFrontend
-  :: forall backendRoute route
-  .  Encoder Identity Identity (R (FullRoute backendRoute route)) PageName
-  -> Frontend (R route)
-  -> JSM ()
-runFrontend validFullEncoder frontend = do
+  :: forall (api :: Type) r.
+     ( Servant.HasRoute api r
+     )
+  => P.Proxy api
+  -> r                        -- ^ Fallback route for unrecognized URLs
+  -> Frontend r
+  -> IO ()
+runFrontend proxy fallback frontend = do
   let mode = FrontendMode
         { _frontendMode_hydrate =
-#if defined(ghcjs_HOST_OS) || defined(wasm32_HOST_ARCH)
-          True
+#ifdef ghcjs_HOST_OS
+            True
 #else
-          False
+            False
 #endif
         , _frontendMode_adjustRoute =
-#if defined(ghcjs_HOST_OS) || defined(wasm32_HOST_ARCH)
-          False
+#ifdef ghcjs_HOST_OS
+            False
 #else
-          True
+            True
 #endif
         }
-#if defined(ghcjs_HOST_OS) || defined(wasm32_HOST_ARCH)
-  configs <- Lookup.getConfigs
-#else
-  configs <- liftIO Lookup.getConfigs
-#endif
-  when (_frontendMode_hydrate mode) removeHTMLConfigs
-  -- There's no fundamental reason that adjustRoute needs to control setting the
-  -- initial route and *also* the useHash parameter; that's why these are
-  -- separate here.  However, currently, they are always the same.
-  when (_frontendMode_adjustRoute mode) $ do
-    setInitialRoute $ _frontendMode_adjustRoute mode
-  runFrontendWithConfigsAndCurrentRoute mode configs validFullEncoder frontend
+  runFrontendWithConfigsAndCurrentRoute mode Map.empty proxy fallback frontend
 
+-- | Like 'runFrontend' but takes an explicit 'FrontendMode' and
+-- pre-loaded config map. Eff port of upstream
+-- @Obelisk.Frontend.runFrontendWithConfigsAndCurrentRoute@.
+--
+-- On hydrate mode, 'removeHTMLConfigs' strips the SSR-injected script
+-- tags. On hash-route mode, 'setInitialRoute' rewrites the current URL
+-- into a hash-fragment shape before the router reads it.
 runFrontendWithConfigsAndCurrentRoute
-  :: forall backendRoute frontendRoute
-  .  FrontendMode
+  :: forall (api :: Type) r.
+     ( Servant.HasRoute api r
+     )
+  => FrontendMode
   -> Map Text ByteString
-  -> Encoder Identity Identity (R (FullRoute backendRoute frontendRoute)) PageName
-  -> Frontend (R frontendRoute)
-  -> JSM ()
-runFrontendWithConfigsAndCurrentRoute mode configs validFullEncoder frontend = do
-  let ve = validFullEncoder . hoistParse errorLeft (reviewEncoder (rPrism $ _FullRoute_Frontend . _JengaRoute_App))
-      errorLeft = \case
-        Left e -> error $ "runFrontend: Failed to decode frontend route: " <> T.unpack e
-        Right x -> Identity x
-      w :: ( RawDocument (DomBuilderSpace (HydrationDomBuilderT s DomTimeline m)) ~ DOM.Document
-           , Ref (Performable m) ~ Ref IO
-           , Ref m ~ Ref IO
-           , DomBuilder DomTimeline (HydrationDomBuilderT s DomTimeline m)
-           , MonadHold DomTimeline m
-           , MonadRef m
-           , MonadRef (Performable m)
-           , MonadReflexCreateTrigger DomTimeline m
-           , PerformEvent DomTimeline m
-           , PostBuild DomTimeline m
-           , PrimMonad m
-           , MonadSample DomTimeline (Performable m)
-           , DOM.MonadJSM m
-           , MonadFix (Performable m)
-           , MonadFix m
-           , Prerender DomTimeline (HydrationDomBuilderT s DomTimeline m)
-           , MonadIO (Performable m)
-           )
-        => (forall c. HydrationDomBuilderT s DomTimeline m c -> FloatingWidget () c)
-        -> (forall c. HydrationDomBuilderT s DomTimeline m c -> FloatingWidget () c)
-        -> FloatingWidget () ()
-      w appendHead appendBody = do
-        rec switchover <- runRouteViewT ve switchover (_frontendMode_adjustRoute mode) $ do
-              (switchover'', fire) <- newTriggerEvent
-              mapRoutedT (mapSetRouteT (mapRouteToUrlT (appendHead . runConfigsT configs))) $ do
-                -- The order here is important - baseTag has to be before headWidget!
-                baseTag
-                _frontend_head frontend
-              mapRoutedT (mapSetRouteT (mapRouteToUrlT (appendBody . runConfigsT configs))) $ do
-                _frontend_body frontend
-                switchover' <- case _frontendMode_hydrate mode of
-                  True -> lift $ lift $ lift $ lift $ HydrationDomBuilderT $ asks _hydrationDomBuilderEnv_switchover
-                  False -> getPostBuild
-                performEvent_ $ liftIO (fire ()) <$ switchover'
-              pure switchover''
-        pure ()
-  if _frontendMode_hydrate mode
-    then runHydrationWidgetWithHeadAndBody (pure ()) w
-    else runImmediateWidgetWithHeadAndBody w
-
-type FrontendWidgetT r = RoutedT DomTimeline r (SetRouteT DomTimeline r (RouteToUrlT r (ConfigsT (CookiesT (HydratableT (PostBuildT DomTimeline (StaticDomBuilderT DomTimeline (PerformEventT DomTimeline DomHost))))))))
-
-renderFrontendHtml
-  :: MonadIO m
-  => Map Text ByteString
-  -> Cookies
-  -> (r -> Text)
+  -> P.Proxy api
   -> r
   -> Frontend r
-  -> FrontendWidgetT r ()
-  -> FrontendWidgetT r ()
-  -> m ByteString
-renderFrontendHtml configs cookies urlEnc route frontend headExtra bodyExtra = do
-  --TODO: We should probably have a "NullEventWriterT" or a frozen reflex timeline
-  html <- fmap snd $ liftIO $ renderStatic $ runHydratableT $ fmap fst $ runCookiesT cookies $ runConfigsT configs $ flip runRouteToUrlT urlEnc $ runSetRouteT $ flip runRoutedT (pure route) $
-    el "html" $ do
-      el "head" $ do
+  -> IO ()
+runFrontendWithConfigsAndCurrentRoute mode configs proxy fallback frontend =
+  DH.mainWidget $ do
+    when (_frontendMode_hydrate mode) (DH.liftEff removeHTMLConfigs)
+    when (_frontendMode_adjustRoute mode) $
+      DH.liftEff (setInitialRoute (_frontendMode_adjustRoute mode))
+    cookies <- DH.liftEff readCookiesFromDocument
+    DH.liftEff $ runCookies cookies $ runConfigs configs $
+      Routing.runBrowserRouting @api @_ @DH.DomTimeline proxy fallback $ do
         baseTag
-        injectExecutableConfigs configs
         _frontend_head frontend
-        headExtra
-      el "body" $ do
         _frontend_body frontend
-        bodyExtra
-  return $ "<!DOCTYPE html>" <> html

@@ -273,7 +273,7 @@ in {
     # source-repository-packages disabled; using optional-packages in cabal.project instead.
     # inherit (jengaLib) source-repository-packages;
 
-    compiler-nix-name = lib.mkDefault "ghc9122";
+    compiler-nix-name = lib.mkDefault "ghc9141";
 
     overrides = [
       jengaLib.buildTypeOverride

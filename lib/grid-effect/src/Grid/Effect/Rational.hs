@@ -1,4 +1,5 @@
 {-# LANGUAGE CPP #-}
+{-# LANGUAGE UndecidableInstances #-}
 #if !defined(javascript_HOST_ARCH) && !defined(wasm32_HOST_ARCH)
 {-# OPTIONS_GHC -fplugin GHC.TypeLits.Normalise #-}
 {-# OPTIONS_GHC -fplugin GHC.TypeLits.KnownNat.Solver #-}
@@ -43,17 +44,30 @@ type family RatNum (r :: (Nat, Nat)) :: Nat where
 type family RatDen (r :: (Nat, Nat)) :: Nat where
   RatDen '(_, d) = d
 
+-- | Helper: constraint that @ad <= cb@ (used to avoid nested type family
+-- application inside 'Assert' on GHC 9.14+).
+type family RatLeqHelper (ad :: Nat) (cb :: Nat) :: Constraint where
+  RatLeqHelper ad cb = ad <= cb
+
 -- | @a/b <= c/d@ via cross-multiplication. Overflow = compile error.
 type family RatLeq (x :: (Nat, Nat)) (y :: (Nat, Nat)) :: Constraint where
-  RatLeq '(a, b) '(c, d) = (a * d) <= (c * b)
+  RatLeq '(a, b) '(c, d) = RatLeqHelper (a * d) (c * b)
+
+-- | Helper: form @'(ad - bc, bd)@ from already-computed products.
+type family RatSubHelper (ad :: Nat) (bc :: Nat) (bd :: Nat) :: (Nat, Nat) where
+  RatSubHelper ad bc bd = '(ad - bc, bd)
 
 -- | @a/b - c/d = (ad - bc) / bd@. Safe when guarded by 'RatLeq'.
 type family RatSub (x :: (Nat, Nat)) (y :: (Nat, Nat)) :: (Nat, Nat) where
-  RatSub '(a, b) '(c, d) = '(a * d - b * c, b * d)
+  RatSub '(a, b) '(c, d) = RatSubHelper (a * d) (b * c) (b * d)
+
+-- | Helper: form @'(ad + bc, bd)@ from already-computed products.
+type family RatAddHelper (ad :: Nat) (bc :: Nat) (bd :: Nat) :: (Nat, Nat) where
+  RatAddHelper ad bc bd = '(ad + bc, bd)
 
 -- | @a/b + c/d = (ad + bc) / bd@.
 type family RatAdd (x :: (Nat, Nat)) (y :: (Nat, Nat)) :: (Nat, Nat) where
-  RatAdd '(a, b) '(c, d) = '(a * d + b * c, b * d)
+  RatAdd '(a, b) '(c, d) = RatAddHelper (a * d) (b * c) (b * d)
 
 -- | Reify both components at runtime.
 class (KnownNat (RatNum r), KnownNat (RatDen r)) => KnownRat (r :: (Nat, Nat)) where

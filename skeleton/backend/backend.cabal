@@ -166,8 +166,8 @@ library
                     , file-embed
                     , gargoyle-postgresql-connect
                     , jenga-backend-servant
-                    , jenga-route-servant
-                    , reflex-effectful
+                    , jenga-route
+                    , reflex-dom-core-effectful
                     , postgresql-simple
                     , resource-pool
                     , rhyolite-backend

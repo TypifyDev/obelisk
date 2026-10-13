@@ -1,3 +1,5 @@
+{-# LANGUAGE DataKinds #-}
+{-# LANGUAGE TypeApplications #-}
 module Jenga.Backend.DB.Subscriptions where
 
 -- import Backend.DB (db)
@@ -14,6 +16,7 @@ import Web.Stripe.Subscription
 import Database.Beam.Schema
 import Database.Beam.Postgres
 import Database.Beam.Query
+import Database.Beam.Query.Shape (Shape (..))
 
 import Control.Monad.IO.Class
 import Data.Functor.Identity
@@ -21,7 +24,7 @@ import qualified Data.Text as T
 import Data.Time.Clock
 
 lookupFreeTrial :: Database Postgres db => PgTable Postgres db FreeTrial -> Id Account -> Pg (Maybe (FreeTrial Identity))
-lookupFreeTrial freeTrialTbl aid = runSelectReturningOne $ select $ do
+lookupFreeTrial freeTrialTbl aid = runSelectReturningOne $ select @'STable $ do
   freeTrials <- all_ freeTrialTbl
   guard_ $ _freeTrial_userID freeTrials ==. (val_ $ acctIDtoInt64 aid)
   pure freeTrials
@@ -38,7 +41,7 @@ putNewStripeInfo stripeTbl aid (CustomerId cid) (SubscriptionId sid) = runInsert
   ]
 
 getStripeInfo :: Database Postgres db => PgTable Postgres db StripeRelation -> Id Account -> Pg (Maybe (StripeRelation Identity))
-getStripeInfo stripeTbl aid = runSelectReturningOne $ select $ do
+getStripeInfo stripeTbl aid = runSelectReturningOne $ select @'STable $ do
   infos <- all_ stripeTbl
   guard_ $ _stripeRelation_uid infos ==. (val_ $ acctIDtoInt64 aid)
   pure infos
@@ -52,14 +55,14 @@ recordEndSubscription stripeTbl aid = runUpdate $
 
 isSubscriber :: Database Postgres db => PgTable Postgres db StripeRelation -> Id Account -> Pg Bool
 isSubscriber stripeTbl aid = do
-  x <- runSelectReturningOne $ select $ do
+  x <- runSelectReturningOne $ select @'STable $ do
     filter_ (\stripeR -> _stripeRelation_uid stripeR ==. (val_ . acctIDtoInt64 $ aid)) $ all_ stripeTbl
   case x of
     Nothing -> pure False
     Just _ -> pure True
 
 getUsersDiscountCode :: Database Postgres db => PgTable Postgres db FreeTrial -> Id Account -> Pg (Maybe (Maybe DiscountCode))
-getUsersDiscountCode freeTrialTbl aid = fmap (fmap _freeTrial_discountCode ) $ runSelectReturningOne $ select $ do
+getUsersDiscountCode freeTrialTbl aid = fmap (fmap _freeTrial_discountCode ) $ runSelectReturningOne $ select @'STable $ do
   fTrials <- all_ freeTrialTbl
   guard_ $ _freeTrial_userID fTrials ==. (val_ $ acctIDtoInt64 aid)
   pure fTrials

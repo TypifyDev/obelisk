@@ -44,12 +44,13 @@ library
                , staticAssets
                , obelisk-oauth-common
                , effectful-core
-               , jenga-route-servant
+               , jenga-route
                , parsec
                , random
-               , reflex
                , reflex-classhss
-               , reflex-effectful
+               , reflex
+               , reflex-dom-core
+               , reflex-dom-core-effectful
                , rhyolite-account-types
                , rhyolite-common
                , rhyolite-frontend
@@ -61,8 +62,8 @@ library
                , servant-jsaddle
                , vessel
                , ref-tf
-               , reflex-dom-core
                , data-default
+               , mtl
   exposed-modules:
     Jenga.Frontend.Api
     Jenga.Frontend.Api.Client
@@ -77,13 +78,22 @@ library
     Jenga.Frontend.TimeExtras
     Jenga.Frontend.Auth.Authentication
     Jenga.Frontend.Auth.CompanySignup
-    Jenga.Frontend.Auth.UserSignup
     Jenga.Frontend.Auth.Login
+    Jenga.Frontend.Auth.OAuth
     Jenga.Frontend.Auth.RedeemLink
     Jenga.Frontend.Auth.RequestPasswordReset
     Jenga.Frontend.Auth.ResetPassword
+    Jenga.Frontend.Auth.Session
     Jenga.Frontend.Auth.Subscribe.Paywall
     Jenga.Frontend.Auth.Subscribe.StartFreeTrial
+    Jenga.Frontend.Auth.UserSignup
+
+  -- Re-expose the legacy 'Reflex.Effectful.Effect.Jenga.Route' alias so
+  -- 'frontend-auth' (which does not directly depend on jenga-route)
+  -- can still resolve callers written against the pre-move name. The real
+  -- module lives in jenga-route; see the note in that module.
+  reexported-modules:
+    Reflex.Effectful.Effect.Jenga.Route
 
   ghc-options: -Wall
                -- -Wunused-packages

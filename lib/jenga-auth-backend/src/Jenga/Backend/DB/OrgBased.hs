@@ -1,136 +1,251 @@
+{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE DataKinds #-}
+{-# LANGUAGE TypeApplications #-}
 module Jenga.Backend.DB.OrgBased where
 
--- import Backend.DB
--- import Backend.DB.UserInfo
+import Database.Beam.Query.Shape (Shape (..))
+
 import Jenga.Common.Schema
+import Jenga.Common.Company
+import Jenga.Common.Errors
 import Jenga.Backend.Utils.HasTable
+import Effectful (Eff, (:>), IOE)
+import qualified Effectful.Reader.Static as ER
+import Jenga.Backend.Utils.HasConfig
 import Jenga.Backend.DB.Auth
 import Jenga.Common.BeamExtras
--- import Common.Types
--- import Common.Schema
 import Jenga.Common.Auth
 
 import Rhyolite.Account
+import Database.Beam.Backend.SQL.BeamExtensions (runInsertReturningList)
 import Database.Beam.Postgres
 import Database.Beam.Schema
 import Database.Beam.Query
 
-import Text.Email.Validate as EmailValidate
-import Control.Monad
+import Control.Monad.IO.Class
+import Control.Monad.Trans.Reader
+import Data.Pool
+import Data.Maybe (isJust)
 import Data.Functor.Identity
 import Data.Int (Int64)
 import qualified Data.Text as T
-import qualified Data.Text.Encoding as T
 
-isOrgEmail
+isOrgOwnedUser
   :: Database Postgres db
-  => PgTable Postgres db OrganizationEmails
-  -> T.Text
+  => PgTable Postgres db OrgOwnedUsers
+  -> Id Account
   -> Pg Bool
-isOrgEmail orgTbl email = do
-  maybeValidEmail <- runSelectReturningOne $ select $ do
-    orgEmails <- all_ orgTbl
-    guard_ $ _validEmails_email orgEmails ==. (val_ email)
-    pure orgEmails
-  case maybeValidEmail of
-    Just _ -> pure True
-    Nothing -> pure False
+isOrgOwnedUser tbl acctId = do
+  result <- runSelectReturningOne $ select @'STable $ do
+    row <- all_ tbl
+    guard_ $ _orgOwnedUsers_accountId row ==. val_ acctId
+    pure row
+  pure $ isJust result
 
-putNewOrgEmail :: PgTable Postgres db OrganizationEmails -> NewUserEmail -> Pg ()
-putNewOrgEmail orgTbl (NewUserEmail email orgFrom) = runInsert $ insert orgTbl $ insertExpressions
-  [ OrganizationEmails (val_ $ T.toLower . T.decodeUtf8 . EmailValidate.toByteString $ email) (val_ orgFrom)
+addOrgOwnedUser
+  :: PgTable Postgres db OrgOwnedUsers
+  -> Id Account
+  -> PrimaryKey CompanyInfo Identity
+  -> Pg ()
+addOrgOwnedUser tbl acctId companyId = runInsert $ insert tbl $ insertExpressions
+  [ OrgOwnedUsers (val_ acctId) (val_ companyId)
   ]
 
 getThisUsersOrg
   :: Database Postgres db
-  => PgTable Postgres db OrganizationEmails
-  -> T.Text
-  -> Pg (Maybe (OrganizationEmails Identity))
-getThisUsersOrg orgTbl email = runSelectReturningOne $ select $ do
-  orgEmails <- all_ orgTbl
-  guard_ $ _validEmails_email orgEmails ==. (val_ email)
-  pure orgEmails
+  => PgTable Postgres db OrgOwnedUsers
+  -> Id Account
+  -> Pg (Maybe (OrgOwnedUsers Identity))
+getThisUsersOrg tbl acctId = runSelectReturningOne $ select @'STable $ do
+  row <- all_ tbl
+  guard_ $ _orgOwnedUsers_accountId row ==. val_ acctId
+  pure row
 
-getAdminOrgName
+-- | Look up the company ID for the given account, then run the continuation.
+-- Returns NoAuth if the account has no associated company (i.e. not an admin).
+runAdmin
+  :: forall db m cfg e a.
+     ( Database Postgres db
+     , MonadIO m
+     , HasConfig cfg (Pool Connection)
+     , HasJengaTable Postgres db UserTypeTable
+     )
+  => Id Account
+  -> (PrimaryKey CompanyInfo Identity -> ReaderT cfg m (Either (BackendError e) a))
+  -> ReaderT cfg m (Either (BackendError e) a)
+runAdmin aid k = do
+  (uTypeTbl :: PgTable Postgres db UserTypeTable) <- asksTableM
+  mCompanyId <- withDbEnv $ getCompanyId uTypeTbl aid
+  case mCompanyId of
+    Nothing -> pure $ Left NoAuth
+    Just companyId -> k companyId
+
+-- | Verify admin auth, get company ID and org user account IDs.
+runWithMyUsers
+  :: forall db m cfg e a.
+     ( Database Postgres db
+     , MonadIO m
+     , HasConfig cfg (Pool Connection)
+     , HasJengaTable Postgres db UserTypeTable
+     , HasJengaTable Postgres db OrgOwnedUsers
+     )
+  => Id Account
+  -> (PrimaryKey CompanyInfo Identity -> [Id Account] -> ReaderT cfg m (Either (BackendError e) a))
+  -> ReaderT cfg m (Either (BackendError e) a)
+runWithMyUsers acctID k =
+  runAdmin @db acctID $ \cId -> do
+    (orgTbl :: PgTable Postgres db OrgOwnedUsers) <- asksTableM
+    orgUsers <- withDbEnv $ getOrgUsers orgTbl cId
+    k cId (_orgOwnedUsers_accountId <$> orgUsers)
+
+-- | Effectful port of 'runAdmin'. Same shape but returns 'Eff es'
+-- and draws the config from an 'ER.Reader cfg' effect.
+runAdminE
+  :: forall db cfg e es a.
+     ( Database Postgres db
+     , IOE :> es
+     , ER.Reader cfg :> es
+     , HasConfig cfg (Pool Connection)
+     , HasJengaTable Postgres db UserTypeTable
+     )
+  => Id Account
+  -> (PrimaryKey CompanyInfo Identity -> Eff es (Either (BackendError e) a))
+  -> Eff es (Either (BackendError e) a)
+runAdminE aid k = do
+  let uTypeTbl = tableRef :: PgTable Postgres db UserTypeTable
+  mCompanyId <- withDbEnvE @cfg $ getCompanyId uTypeTbl aid
+  case mCompanyId of
+    Nothing -> pure $ Left NoAuth
+    Just companyId -> k companyId
+
+-- | Effectful port of 'runWithMyUsers'.
+runWithMyUsersE
+  :: forall db cfg e es a.
+     ( Database Postgres db
+     , IOE :> es
+     , ER.Reader cfg :> es
+     , HasConfig cfg (Pool Connection)
+     , HasJengaTable Postgres db UserTypeTable
+     , HasJengaTable Postgres db OrgOwnedUsers
+     )
+  => Id Account
+  -> (PrimaryKey CompanyInfo Identity -> [Id Account] -> Eff es (Either (BackendError e) a))
+  -> Eff es (Either (BackendError e) a)
+runWithMyUsersE acctID k =
+  runAdminE @db @cfg acctID $ \cId -> do
+    let orgTbl = tableRef :: PgTable Postgres db OrgOwnedUsers
+    orgUsers <- withDbEnvE @cfg $ getOrgUsers orgTbl cId
+    k cId (_orgOwnedUsers_accountId <$> orgUsers)
+
+-- | Get the CompanyInfo ID for an admin account
+getCompanyId
   :: Database Postgres db
   => PgTable Postgres db UserTypeTable
   -> Id Account
-  -> Pg (Maybe T.Text)
-getAdminOrgName = getOrgName
--- uTypeTbl aid = fmap join $ runSelectReturningOne $ select $ do
---   uTypes <- all_ uTypeTbl
---   guard_ $ _userType_acctID uTypes ==. (val_ $ acctIDtoInt64 aid)
---   pure $ _userType_companyID uTypes
-
-getOrgName
-  :: Database Postgres db
-  => PgTable Postgres db UserTypeTable
-  -> Id Account
-  -> Pg (Maybe T.Text)
-getOrgName uTypeTbl aid = do
-  mUType <- runSelectReturningOne $ select $ do
+  -> Pg (Maybe (PrimaryKey CompanyInfo Identity))
+getCompanyId uTypeTbl aid = do
+  mUType <- runSelectReturningOne $ select @'STable $ do
     uTypes <- all_ uTypeTbl
     guard_ $ _userType_acctID uTypes ==. (val_ $ acctIDtoInt64 aid)
     pure uTypes
-  pure $ join $ _userType_companyID <$> mUType
+  pure $ do
+    uType <- mUType
+    let CompanyInfoId mCid = _userType_companyID uType
+    CompanyInfoId <$> mCid
+
+-- | Insert a fresh CompanyInfo row with only the name populated
+-- (all other columns default to Nothing) and return the new row's PK.
+insertNewCompany
+  :: Database Postgres db
+  => PgTable Postgres db CompanyInfo
+  -> T.Text
+  -> Pg (PrimaryKey CompanyInfo Identity)
+insertNewCompany companyTbl name = do
+  inserted <- runInsertReturningList $ insert companyTbl $ insertExpressions
+    [ CompanyInfo
+        default_
+        (val_ name)
+        (val_ Nothing)
+        (val_ Nothing)
+        (val_ Nothing)
+        (val_ Nothing)
+    ]
+  case inserted of
+    (row:_) -> pure $ primaryKey row
+    []      -> error "insertNewCompany: INSERT ... RETURNING returned no rows"
+
+getOrgName
+  :: Database Postgres db
+  => PgTable Postgres db CompanyInfo
+  -> PrimaryKey CompanyInfo Identity
+  -> Pg (Maybe T.Text)
+getOrgName companyTbl cid = do
+  mCompany <- runSelectReturningOne $ lookup_ companyTbl cid
+  pure $ _companyInfo_name <$> mCompany
+
+getAdminOrgName
+  :: Database Postgres db
+  => PgTable Postgres db CompanyInfo
+  -> PrimaryKey CompanyInfo Identity
+  -> Pg (Maybe T.Text)
+getAdminOrgName = getOrgName
 
 getOrgUsers
   :: Database Postgres db
-  => PgTable Postgres db OrganizationEmails
-  -> T.Text
-  -> Pg [OrganizationEmails Identity]
-getOrgUsers orgTbl orgName = runSelectReturningList $ select $ do
-  orgUsers <- all_ orgTbl
-  guard_ $ _validEmails_organizationFrom orgUsers ==. (val_ orgName)
-  pure orgUsers
+  => PgTable Postgres db OrgOwnedUsers
+  -> PrimaryKey CompanyInfo Identity
+  -> Pg [OrgOwnedUsers Identity]
+getOrgUsers tbl companyId = runSelectReturningList $ select @'STable $ do
+  row <- all_ tbl
+  let CompanyInfoId cid = _orgOwnedUsers_companyId row
+      CompanyInfoId targetCid = companyId
+  guard_ $ cid ==. val_ targetCid
+  pure row
 
 putAccountRelations
   :: Database Postgres db
   => PgTable Postgres db UserTypeTable
-  -> PgTable Postgres db OrganizationEmails
+  -> PgTable Postgres db OrgOwnedUsers
   -> PrimaryKey Account Identity
   -> IsUserType
   -> Pg (Either UserSignupError ())
 putAccountRelations uTypeTbl orgTable aid = \case
-  IsGroupUser email orgName -> do
-    tryPutGroupUser uTypeTbl orgTable aid email orgName
+  IsGroupUser _email companyId -> do
+    tryPutGroupUser uTypeTbl orgTable aid companyId
   IsSelf -> do
     putNewUserType uTypeTbl aid Nothing
     pure $ Right ()
-  IsCompany orgName -> do
-    putNewUserType uTypeTbl aid (Just orgName)
+  IsCompany companyId -> do
+    putNewUserType uTypeTbl aid (Just companyId)
     pure $ Right ()
---  acctID | companyID  | userType
--- --------+------------+----------
---     106 | Ace        | Admin
-
 
 tryPutGroupUser
   :: Database Postgres db
   => PgTable Postgres db UserTypeTable
-  -> PgTable Postgres db OrganizationEmails
+  -> PgTable Postgres db OrgOwnedUsers
   -> PrimaryKey Account Identity
-  -> EmailAddress
-  -> T.Text
+  -> PrimaryKey CompanyInfo Identity
   -> Pg (Either UserSignupError ())
-tryPutGroupUser uTypeTbl orgTable aid email orgName = do
-  lookupCompanyInUserTypeTable uTypeTbl orgName >>= \case
+tryPutGroupUser uTypeTbl orgTable aid companyId = do
+  lookupCompanyInUserTypeTable uTypeTbl companyId >>= \case
     Nothing -> pure $ Left NoLinkedOrganization
     Just _ -> do
       putNewUserType uTypeTbl aid Nothing
-      putNewOrgEmail orgTable (NewUserEmail email orgName)
+      addOrgOwnedUser orgTable aid companyId
       pure $ Right ()
 
 lookupCompanyInUserTypeTable
   :: Database Postgres db
   => PgTable Postgres db UserTypeTable
-  -> T.Text
+  -> PrimaryKey CompanyInfo Identity
   -> Pg (Maybe (UserTypeTable Identity))
-lookupCompanyInUserTypeTable uTypeTbl orgName = do
-  runSelectReturningOne $ select $ do
+lookupCompanyInUserTypeTable uTypeTbl companyId = do
+  runSelectReturningOne $ select @'STable $ do
     uTypes <- all_ uTypeTbl
     guard_ $ _userType_userType uTypes ==. (val_ Admin)
-    guard_ $ _userType_companyID uTypes ==. (val_ $ Just orgName)
+    let CompanyInfoId mCid = _userType_companyID uTypes
+        CompanyInfoId targetCid = companyId
+    guard_ $ mCid ==. just_ (val_ targetCid)
     pure uTypes
 
 getInviteLinkByCode
@@ -139,7 +254,7 @@ getInviteLinkByCode
   -> T.Text
   -> Pg (Maybe (InviteLink Identity))
 getInviteLinkByCode inviteTbl codeLink = do
-  runSelectReturningOne $ select $ do
+  runSelectReturningOne $ select @'STable $ do
     filter_ (\link -> _inviteLink_code link ==. (val_ codeLink)) $ all_ inviteTbl
 
 setLinkNumLeft
@@ -154,3 +269,12 @@ setLinkNumLeft inviteTbl codeLink numLeft = do
        _inviteLink_numLeft inviteLink <-. (val_ $ Just numLeft)
     )
     (\inviteLink -> _inviteLink_code inviteLink ==. (val_ codeLink) &&. (isJust_ $ _inviteLink_numLeft inviteLink))
+
+insertInviteLink
+  :: PgTable Postgres db InviteLink
+  -> PrimaryKey CompanyInfo Identity
+  -> T.Text
+  -> Maybe Int64
+  -> Pg ()
+insertInviteLink inviteTbl companyId code mNumLeft = runInsert $ insert inviteTbl $ insertExpressions
+  [ InviteLink (val_ companyId) (val_ code) (val_ mNumLeft) ]

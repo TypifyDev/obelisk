@@ -11,7 +11,9 @@ library
     bytestring,
     base64-bytestring,
     containers,
-    reflex-dom-core,
+    reflex,
+    reflex-dom-core-effectful,
+    effectful-core,
     text
 
   exposed-modules: Jenga.ExecutableConfig.Inject

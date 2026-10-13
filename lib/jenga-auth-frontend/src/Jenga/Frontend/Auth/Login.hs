@@ -4,30 +4,31 @@
 {-# LANGUAGE AllowAmbiguousTypes #-}
 module Jenga.Frontend.Auth.Login where
 
-import Jenga.Frontend.Api (runAPIWithHeaders)
+import Jenga.Frontend.Api (runAPIWithHeaders, runAPIWithHeadersMTL, RunAPI)
 import Jenga.Frontend.Platform
 import Jenga.Common.HasJengaConfig
-import Templates.Types
 import Jenga.Common.Auth
 import Jenga.Common.Errors
-import Jenga.Route (HasRoute)
-import Jenga.Route.Frontend (SetRoute, setRoute)
-import Reflex (Reflex, Event, Dynamic, current, tag, leftmost)
+import Jenga.Route.Servant (HasRoute)
+import qualified Jenga.Route.Frontend as RouteE (SetRoute, setRoute)
+import qualified Jenga.Route.FrontendMTL as RouteM (SetRoute, setRoute)
+import Jenga.Route (R)
+import Reflex.Class (Reflex, Event, Dynamic, current, tag, leftmost)
+import qualified Reflex.Class as R
+import qualified Reflex.Dom.Core as RDC
+import Reflex.Dom.Core (HasValue(..))
+import Control.Monad.Reader (MonadReader)
+import Control.Monad.IO.Class (MonadIO)
+import Language.Javascript.JSaddle.Types (MonadJSM)
 
-import Data.Proxy (Proxy)
 import qualified Data.Map as M
 import qualified Data.Text as T
 
 import Effectful (Eff, (:>))
-import Effectful.Reader.Static ()
-import Reflex.Effectful.Types (KnownTimeline)
-import Reflex.Effectful.Effect.Hold (Hold, holdDyn)
-import Reflex.Effectful.Effect.Dom (Dom)
-import Reflex.Effectful.Effect.PostBuild (PostBuild)
-import Reflex.Effectful.Effect.TriggerEvent (TriggerEvent)
-import Reflex.Effectful.Effect.PerformEvent (PerformEvent)
-import Reflex.Effectful.Effect.Prerender (Prerender)
-import Jenga.Frontend.Effectful.Configs (Configs)
+import Effectful.Reader.Static (Reader)
+import Reflex.Dom.Core (InputElement, EventResult)
+import Reflex.Effectful.DomHost (HasDocumentE)
+import Reflex.Class (holdDyn)
 
 data LoginConfig t = LoginConfig
   { _loginConfig_errors :: Dynamic t (Maybe T.Text)
@@ -35,47 +36,78 @@ data LoginConfig t = LoginConfig
   , _loginConfig_token :: Event t (AuthToken, UserType)
   }
 
-data LoginData t m = LoginData
-  { _login_username :: InputEl t m
-  , _login_password :: InputEl t m
+data LoginData s t m = LoginData
+  { _login_username :: InputElement EventResult s t
+  , _login_password :: InputElement EventResult s t
   , _login_submit :: Event t ()
   , _login_forgotPassword :: Event t ()
   , _login_goSignup :: Event t ()
   }
 
-login_FRP
-  :: forall api backendR cfg frontendR t es.
-     ( Hold t :> es
-     , Dom t :> es
-     , PostBuild t :> es
-     , SetRoute t frontendR :> es
-     , Configs :> es
-     , Prerender t :> es
-     , PerformEvent t :> es
-     , TriggerEvent t :> es
+-- | Effectful variant. See 'login_FRP' for the MTL twin.
+login_FRPE
+  :: forall api backendR cfg frontendR t space es.
+     ( RunAPI t space es
+     , HasDocumentE space :> es
+     , RouteE.SetRoute t frontendR :> es
      , HasRoute api backendR
      , Reader cfg :> es, HasConfig cfg BaseURL
-     , Reflex t
-     , KnownTimeline es t
      )
-  => Proxy api
-  -> backendR
+  => backendR
   -> frontendR
   -> frontendR
-  -> LoginData t (Eff es)
+  -> LoginData space t (Eff es)
   -> Eff es (LoginConfig t)
-login_FRP proxy loginRoute requestNewPasswordPageRoute signupRoute (LoginData user pass submit forgotPass goSignup) = do
+login_FRPE loginRoute requestNewPasswordPageRoute signupRoute (LoginData user pass submit forgotPass goSignup) = do
   let credentials :: Event t (T.Text, T.Text)
       credentials = tag (current $ (,) <$> value user <*> value pass) submit
   (err :: Event t (RequestError LoginError), token :: Event t (AuthToken, UserType)) <-
-    runAPIWithHeaders @api @backendR @t @es @cfg proxy loginRoute (M.fromList [(clientTypeHeader, T.pack . show $ clientType)]) credentials
+    runAPIWithHeaders @api @backendR @t @space @es @cfg loginRoute (M.fromList [(clientTypeHeader, T.pack . show $ clientType)]) credentials
   shouldSubmit <- holdDyn True $ leftmost [False <$ credentials, True <$ token, True <$ err]
   errors <- holdDyn Nothing $ Just . showUser <$> err
-  setRoute $ requestNewPasswordPageRoute <$ forgotPass
-  setRoute $ signupRoute <$ goSignup
+  RouteE.setRoute $ requestNewPasswordPageRoute <$ forgotPass
+  RouteE.setRoute $ signupRoute <$ goSignup
   pure LoginConfig
     { _loginConfig_errors = errors
     , _loginConfig_submitEnabled = shouldSubmit
     , _loginConfig_token = token
     }
-  where value = undefined -- TODO: from Templates.Types InputEl accessor
+
+-- | MTL twin of 'login_FRPE'. Calls 'runAPIWithHeadersMTL' which already
+-- handles the client-side XHR + decoding + fanning; this function just
+-- builds the credentials tuple from the two 'InputElement' values,
+-- threads error/success events, and routes on forgot-password / signup.
+login_FRP
+  :: forall be fe cfg frontendR t m.
+     ( RDC.DomBuilder t m, RDC.Prerender t m, RDC.MonadHold t m
+     , RDC.PerformEvent t (RDC.Client m), RDC.TriggerEvent t (RDC.Client m)
+     , MonadIO (RDC.Performable (RDC.Client m))
+     , MonadJSM (RDC.Performable (RDC.Client m))
+     , MonadReader cfg m
+     , HasConfig cfg (FullRouteEncoder be fe)
+     , HasConfig cfg BaseURL
+     , RouteM.SetRoute t frontendR m
+     , Reflex t
+     )
+  => R be
+  -> frontendR
+  -> frontendR
+  -> LoginData (RDC.DomBuilderSpace m) t m
+  -> m (LoginConfig t)
+login_FRP loginRoute requestNewPasswordPageRoute signupRoute (LoginData user pass submit forgotPass goSignup) = do
+  let credentials :: Event t (T.Text, T.Text)
+      credentials = tag (current $ (,) <$> value user <*> value pass) submit
+  (err, token) <-
+    runAPIWithHeadersMTL @be @fe @t @m @cfg @(T.Text, T.Text) @(AuthToken, UserType) @LoginError
+      loginRoute
+      (M.fromList [(clientTypeHeader, T.pack . show $ clientType)])
+      credentials
+  shouldSubmit <- R.holdDyn True $ leftmost [False <$ credentials, True <$ token, True <$ err]
+  errors <- R.holdDyn Nothing $ Just . showUser <$> err
+  RouteM.setRoute $ requestNewPasswordPageRoute <$ forgotPass
+  RouteM.setRoute $ signupRoute <$ goSignup
+  pure LoginConfig
+    { _loginConfig_errors = errors
+    , _loginConfig_submitEnabled = shouldSubmit
+    , _loginConfig_token = token
+    }

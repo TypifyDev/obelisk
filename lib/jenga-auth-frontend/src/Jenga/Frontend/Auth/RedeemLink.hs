@@ -2,45 +2,60 @@
 
 module Jenga.Frontend.Auth.RedeemLink where
 
-import Templates.Types
 import Jenga.Common.Errors
 import Jenga.Common.Auth
-import Jenga.Route.Frontend (Routed, askRoute)
-import Reflex (Reflex, Event, Dynamic, current, tag, attach, leftmost, ffor, fanEither)
+import qualified Jenga.Route.Frontend as RouteE (Routed, askRoute)
+import qualified Jenga.Route.FrontendMTL as RouteM (Routed, askRoute)
+import Reflex.Class (Reflex, Event, Dynamic, current, tag, attach, leftmost, ffor, fanEither)
+import qualified Reflex.Class as R
+import Reflex.Dom.Core (HasValue(..))
 
 import qualified Data.Text as T
 
 import Effectful (Eff, (:>))
-import Reflex.Effectful.Types (KnownTimeline)
-import Reflex.Effectful.Effect.Hold (Hold, holdDyn)
-import Reflex.Effectful.Effect.Dom (Dom)
-import Reflex.Effectful.Effect.PostBuild (PostBuild)
+import Reflex.Dom.Core (InputElement, EventResult)
+import Reflex.Class (holdDyn)
+import Reflex.Host.HeadlessEffectful (Hold)
+import Reflex.Host.HeadlessEffectful (Sample)
+import Reflex.Host.HeadlessEffectful (PostBuild)
 
 
 newtype RedeemLinkConfig t = RedeemLinkConfig
   { _redeemLinkConfig_errors :: Dynamic t (Maybe T.Text)
   }
 
-data RedeemLinkData t m = RedeemLinkData
-  { _redeemLink_email :: InputEl t m
-  , _redeemLink_confirmEmail :: InputEl t m
+-- | Parameterized on the DOM space 's' so consumers thread whatever
+-- 'DomBuilderSpaceE es' resolves to in their effect row, instead of the
+-- library hardcoding 'GhcjsDomSpace'. This lets the same record work
+-- against static / hydration / immediate / prerender spaces.
+data RedeemLinkData s t = RedeemLinkData
+  { _redeemLink_email :: InputElement EventResult s t
+  , _redeemLink_confirmEmail :: InputElement EventResult s t
   , _redeemLink_submit :: Event t ()
   }
 
-redeemLink_FRP
-  :: forall req rsp t es.
-     ( Dom t :> es
-     , PostBuild t :> es
-     , Hold t :> es
-     , Routed t T.Text :> es
+-- | Widened error type: this family now accepts the full
+-- 'BackendError RedeemLinkError' surface, so every backend branch
+-- (BUserError, BCritical, BNoAuth family, BException, BInvalidRequest)
+-- reaches the user via the 'ShowUser (BackendError e)' instance. This
+-- eliminates the systemic 'fmapMaybe'-drop workarounds that used to
+-- live in each consumer, which silently swallowed non-inner-error
+-- branches.
+-- | Effectful variant. See 'redeemLink_FRP' for the MTL twin.
+redeemLink_FRPE
+  :: forall req rsp s t es.
+     ( PostBuild t :> es
+     , Hold t :> es, Sample t :> es
+     , RouteE.Routed t T.Text :> es
      , Reflex t
-     , KnownTimeline es t
+
      )
   => ((T.Text, Email) -> req)
   -> (Event t req -> Eff es (Event t rsp))
-  -> RedeemLinkData t (Eff es)
+  -> (rsp -> Either (BackendError RedeemLinkError) T.Text)
+  -> RedeemLinkData s t
   -> Eff es (RedeemLinkConfig t)
-redeemLink_FRP mkAPI sendRequest (RedeemLinkData email' eConfirm' submit) = do
+redeemLink_FRPE mkAPI sendRequest castResponse (RedeemLinkData email' eConfirm' submit) = do
   let email = value email'
   let eConfirm = value eConfirm'
   let
@@ -51,17 +66,47 @@ redeemLink_FRP mkAPI sendRequest (RedeemLinkData email' eConfirm' submit) = do
                  )
     emails_agree = fmap checkMatch $ (,) <$> email <*> eConfirm
   let (bad, good) = fanEither (tag (current emails_agree) submit)
-  codeLink <- askRoute
+  codeLink <- RouteE.askRoute
   let req = ffor (attach (current codeLink) $ Email <$> good) mkAPI
   response <- sendRequest req
-  let (err, res) = fanEither (castResponse response) :: (Event t RedeemLinkError, Event t T.Text)
-
+  let (err, res) = fanEither (fmap castResponse response) :: (Event t (BackendError RedeemLinkError), Event t T.Text)
   let errorsEv = Just <$> leftmost [ showUser <$> err
                                    , bad
                                    , "Success, please check your email" <$ res
                                    ]
   errors <- holdDyn Nothing errorsEv
   pure $ RedeemLinkConfig errors
-  where
-    value = undefined -- TODO: InputEl accessor
-    castResponse = undefined -- TODO: cast response type
+
+-- | MTL twin of 'redeemLink_FRPE'.
+redeemLink_FRP
+  :: forall req rsp s t m.
+     ( RouteM.Routed t T.Text m
+     , R.MonadHold t m
+     , Reflex t
+     )
+  => ((T.Text, Email) -> req)
+  -> (Event t req -> m (Event t rsp))
+  -> (rsp -> Either (BackendError RedeemLinkError) T.Text)
+  -> RedeemLinkData s t
+  -> m (RedeemLinkConfig t)
+redeemLink_FRP mkAPI sendRequest castResponse (RedeemLinkData email' eConfirm' submit) = do
+  let email = value email'
+  let eConfirm = value eConfirm'
+  let
+    checkMatch = (\(e,confirm) ->
+                    if e == confirm
+                    then Right e
+                    else Left "Emails dont match"
+                 )
+    emails_agree = fmap checkMatch $ (,) <$> email <*> eConfirm
+  let (bad, good) = fanEither (tag (current emails_agree) submit)
+  codeLink <- RouteM.askRoute
+  let req = ffor (attach (current codeLink) $ Email <$> good) mkAPI
+  response <- sendRequest req
+  let (err, res) = fanEither (fmap castResponse response) :: (Event t (BackendError RedeemLinkError), Event t T.Text)
+  let errorsEv = Just <$> leftmost [ showUser <$> err
+                                   , bad
+                                   , "Success, please check your email" <$ res
+                                   ]
+  errors <- R.holdDyn Nothing errorsEv
+  pure $ RedeemLinkConfig errors

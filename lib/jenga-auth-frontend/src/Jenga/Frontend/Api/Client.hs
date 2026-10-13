@@ -1,3 +1,4 @@
+{-# LANGUAGE AllowAmbiguousTypes #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ScopedTypeVariables #-}
@@ -23,25 +24,25 @@ module Jenga.Frontend.Api.Client
 
 import           Control.Exception (SomeException, displayException)
 import qualified Data.Text as T
-import           Effectful (Eff, (:>))
-import           Effectful.Reader.Static ()
+import           Effectful (Eff, (:>), IOE)
 import qualified Reflex as R
 import           Reflex (Event, Reflex)
-import           Reflex.Effectful.Types (KnownTimeline)
-import           Reflex.Effectful.Effect.JSM (JSM')
-import           Reflex.Effectful.Effect.PerformEvent (PerformEvent, performEvent)
-import           Reflex.Effectful.Effect.PostBuild (PostBuild, getPostBuild)
+import           Reflex.Effectful.DomHost (JSM')
+import           Reflex.Host.HeadlessEffectful (PerformEventH, performEventH)
+import           Reflex.Host.HeadlessEffectful (PostBuild, getPostBuildE)
 import qualified Language.Javascript.JSaddle as JS
 import           Servant.Client.JSaddle
                    ( ClientEnv, ClientError, ClientM
                    , mkClientEnv, parseBaseUrl, runClientM
                    )
 
-import           Jenga.Common.HasJengaConfig (BaseURL(..), HasConfig, Reader, asksM)
+import           Jenga.Common.HasJengaConfig (BaseURL(..), HasConfig (..))
+import qualified Effectful.Reader.Static as ER
+import           Effectful.Reader.Static (Reader)
 
 -- | Fire a client action every time the input event fires.
 --
--- @runClientM@ is invoked in JSM (via 'liftJSM' inside 'performEvent's
+-- @runClientM@ is invoked in JSM (via 'liftJSM' inside 'performEventH's
 -- callback). Result event carries the outcome per request.
 --
 -- Widgets pass the client action generated at top level:
@@ -53,30 +54,30 @@ import           Jenga.Common.HasJengaConfig (BaseURL(..), HasConfig, Reader, as
 -- @
 runAPIClient
   :: forall req rsp t es.
-     ( PerformEvent t :> es, JSM' :> es
-     , Reflex t, KnownTimeline es t
+     ( PerformEventH t :> es, JSM' :> es, IOE :> es
+     , Reflex t
      )
   => ClientEnv
   -> (req -> ClientM rsp)
   -> Event t req
   -> Eff es (Event t (Either ClientError rsp))
 runAPIClient env mkClient reqE =
-  performEvent $ R.ffor reqE $ \req ->
+  performEventH $ R.ffor reqE $ \req ->
     JS.liftJSM $ runClientM (mkClient req) env
 
 -- | Convenience: fire a single-shot client action once on postBuild.
 -- Useful for pages that load data as soon as they mount.
 runAPIClientOnPostBuild
   :: forall rsp t es.
-     ( PerformEvent t :> es, JSM' :> es
-     , PostBuild t :> es
-     , Reflex t, KnownTimeline es t
+     ( PerformEventH t :> es, JSM' :> es
+     , PostBuild t :> es, IOE :> es
+     , Reflex t
      )
   => ClientEnv
   -> ClientM rsp
   -> Eff es (Event t (Either ClientError rsp))
 runAPIClientOnPostBuild env action = do
-  pb <- getPostBuild
+  pb <- getPostBuildE
   runAPIClient env (const action) pb
 
 -- | Build a servant-client 'ClientEnv' from jenga's 'BaseURL' config.
@@ -92,7 +93,7 @@ mkClientEnvFromBaseURL
      )
   => Eff es (Either T.Text ClientEnv)
 mkClientEnvFromBaseURL = do
-  BaseURL uri <- asksM @BaseURL @cfg
+  BaseURL uri <- ER.asks (fromCfg :: cfg -> BaseURL)
   case parseBaseUrl (show uri) of
     Right burl -> pure . Right $ mkClientEnv burl
     Left (e :: SomeException) ->

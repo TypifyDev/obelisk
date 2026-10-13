@@ -1,6 +1,6 @@
 module Jenga.Frontend.FRPExtras where
 
-import Reflex.Dom.Core
+import Reflex.Class (Reflex, Event, Dynamic, tag, current, fanEither, ffor, ffilter)
 
 
 tagDyn :: Reflex t => Dynamic t a -> Event t b -> Event t a

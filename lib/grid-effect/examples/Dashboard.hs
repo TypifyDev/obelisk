@@ -8,7 +8,7 @@
 {-# OPTIONS_GHC -fplugin GHC.TypeLits.KnownNat.Solver #-}
 
 -- | Example: Type-safe grid layout for a dashboard using
---  grid-effect + reflex-effectful + Classh.
+--  grid-effect + reflex-dom-effectful + Classh.
 --
 --  CURRENT (no budget tracking — silently overflows):
 --
@@ -44,9 +44,9 @@ import Grid.Effect.Rational
 import Effectful (Eff, (:>))
 import Reflex (Reflex, Event, Dynamic)
 
--- These would come from reflex-effectful in a real app:
+-- These would come from reflex-dom-effectful in a real app:
 -- import Reflex.Effectful
--- import Reflex.Effectful.Run (WidgetEff')
+-- import Reflex.Class (WidgetEff')
 
 -- And these from Classh / reflex-classh:
 -- import Classh
@@ -58,7 +58,7 @@ import Reflex (Reflex, Event, Dynamic)
 -- | Full dashboard: header, sidebar+main, footer.
 -- Budget: exactly 12 consumed per row. Proven at compile time.
 --
--- The @WidgetEff' es t@ constraint gives access to all reflex-effectful
+-- The @WidgetEff' es t@ constraint gives access to all reflex-dom-effectful
 -- effects (Dom, Hold, PerformEvent, etc.) inside each grid cell.
 --
 -- In a real app with Classh, each @consume@ would emit a

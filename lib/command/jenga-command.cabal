@@ -29,13 +29,16 @@ library
   exposed-modules:
     Jenga.Command
     Jenga.Command.App
+    Jenga.Command.Build
     Jenga.Command.Run
     Jenga.Command.Repl
     Jenga.Command.Hoogle
     Jenga.Command.Deploy
     Jenga.Command.Deploy.Init
     Jenga.Command.Deploy.Push
+    Jenga.Command.Gc
     Jenga.Command.Init
+    Jenga.Command.Run.Config
     Jenga.Command.Thunk
     Jenga.Command.Utils
     Obelisk.App
@@ -52,6 +55,7 @@ library
     , which
     , unix
     , bytestring
+    , dhall
     , effectful-core
     , cli-extras
     , exceptions

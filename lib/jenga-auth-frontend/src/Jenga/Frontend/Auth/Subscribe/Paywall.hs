@@ -6,18 +6,21 @@ import Jenga.Common.Auth
 import Jenga.Common.Errors
 import Jenga.Common.Stripe
 import Jenga.Route.Frontend (SetRoute, setRoute)
-import Reflex (Reflex, Event, Dynamic, current, tag, leftmost, ffor, fanEither, ffilter)
+import Reflex.Class (Reflex, Event, Dynamic, current, tag, leftmost, ffor, fanEither, ffilter)
 
 import qualified Data.Text as T
 import Text.Read
 
-import Effectful (Eff, (:>))
-import Reflex.Effectful.Types (KnownTimeline)
-import Reflex.Effectful.Effect.Hold (Hold, holdDyn)
-import Reflex.Effectful.Effect.Dom ()
-import Reflex.Effectful.Effect.PostBuild (PostBuild, getPostBuild)
-import Reflex.Effectful.Effect.PerformEvent (PerformEvent)
-import Reflex.Effectful.Effect.TriggerEvent (TriggerEvent, delay)
+import Effectful (Eff, (:>), IOE)
+import Reflex.Class (holdDyn)
+import Reflex.Host.HeadlessEffectful (Hold)
+import Reflex.Host.HeadlessEffectful (Sample)
+import Reflex.Host.HeadlessEffectful (PostBuild, getPostBuildE)
+import Reflex.Host.HeadlessEffectful (PerformEventH, PerformEventM, PerformableForRow)
+import qualified Reflex.Host.Class as RH
+import Control.Monad.IO.Class (MonadIO)
+import Reflex.Host.HeadlessEffectful (TriggerEvent)
+import Reflex.Time (delay)
 
 
 data PaywallData t = PaywallData
@@ -40,12 +43,17 @@ data PaywallConfig t = PaywallConfig
 paywall_FRP
   :: forall frontendR t es.
      ( PostBuild t :> es
-     , Hold t :> es
-     , PerformEvent t :> es
+     , Hold t :> es, Sample t :> es
+     , PerformEventH t :> es
+     , PerformEventM (RH.HostFrame t) t :> es
+     , PerformableForRow es ~ RH.HostFrame t
+     , RH.ReflexHost t
+     , MonadIO (RH.HostFrame t)
      , TriggerEvent t :> es
      , SetRoute t frontendR :> es
+     , IOE :> es
      , Reflex t
-     , KnownTimeline es t
+
      )
   => frontendR
   -> (Event t () -> Eff es (Event t (Either (BackendError NoFreeTrialCode) (T.Text, Maybe T.Text))))
@@ -53,7 +61,7 @@ paywall_FRP
   -> PaywallData t
   -> Eff es (PaywallConfig t)
 paywall_FRP loginRoute sendHasFreeTrialCode sendUpgradeToPaid (PaywallData _firstName _lastName cardNumber expiryMonth expiryYear cvc click) = do
-  pb <- getPostBuild
+  pb <- getPostBuildE
   codeResponse <- sendHasFreeTrialCode pb
   let (errFT, email_code :: Event t (T.Text, Maybe T.Text)) = fanEither codeResponse
 

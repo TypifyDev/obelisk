@@ -17,20 +17,21 @@ import Data.Proxy (Proxy(..))
 import qualified Data.Map as Map
 import qualified Data.Text as T
 
-import Effectful (Eff, (:>))
-import Reflex.Effectful.Types (KnownTimeline)
-import Reflex.Effectful.Effect.Dom (Dom, element)
-import Reflex.Effectful.Effect.PostBuild (PostBuild, getPostBuild)
-import Reflex.Effectful.Effect.PerformEvent (PerformEvent, performEvent_)
-import Reflex.Effectful.Effect.JSM (JSM')
+import Effectful (Eff, (:>), IOE)
+import Reflex.Effectful.DomHost (element)
+import Reflex.Effectful.DomHost (DomBuilderE)
+import Reflex.Effectful.DomHost (DomBuilderSpaceE)
+import Reflex.Host.HeadlessEffectful (PostBuild, getPostBuildE)
+import Reflex.Host.HeadlessEffectful (PerformEventH, performEventH_)
+import Reflex.Effectful.DomHost (JSM')
 
 elDynHtmlAttr_
-  :: ( Dom t :> es
+  :: ( DomBuilderE t (DomBuilderSpaceE es) :> es, DomBuilderSpaceE es ~ GhcjsDomSpace
      , PostBuild t :> es
-     , PerformEvent t :> es
+     , PerformEventH t :> es
      , JSM' :> es
+     , IOE :> es
      , Reflex t
-     , KnownTimeline es t
      )
   => T.Text
   -> Map.Map T.Text T.Text
@@ -39,16 +40,16 @@ elDynHtmlAttr_
 elDynHtmlAttr_ elementTag attrs_ html = do
   let cfg = def & elementConfig_initialAttributes .~ Map.mapKeys (AttributeName Nothing) attrs_
   (e, _) <- element elementTag cfg $ pure ()
-  postBuild <- getPostBuild
-  performEvent_ $ ffor (leftmost [updated html, tag (current html) postBuild]) $ \h ->
-    -- performEvent_ expects Event t (JSM ()); GElement.setInnerHTML is MonadJSM
+  postBuild <- getPostBuildE
+  performEventH_ $ ffor (leftmost [updated html, tag (current html) postBuild]) $ \h ->
+    -- performEventH_ expects Event t (JSM ()); GElement.setInnerHTML is MonadJSM
     -- so it already unifies with JSM () — no lift needed.
     GElement.setInnerHTML (_element_raw e) h
   return e
 
 routeLinkImpl
   :: forall t es a route.
-     ( Dom t :> es
+     ( DomBuilderE t (DomBuilderSpaceE es) :> es, DomBuilderSpaceE es ~ GhcjsDomSpace
      , RouteToUrl route :> es
      , SetRoute t route :> es
      , Reflex t

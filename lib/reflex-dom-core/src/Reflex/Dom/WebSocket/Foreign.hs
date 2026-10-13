@@ -1,0 +1,94 @@
+{-# LANGUAGE CPP #-}
+{-# LANGUAGE OverloadedStrings #-}
+#ifdef ghcjs_HOST_OS
+{-# LANGUAGE ForeignFunctionInterface #-}
+{-# LANGUAGE JavaScriptFFI #-}
+#endif
+{-# LANGUAGE LambdaCase #-}
+
+module Reflex.Dom.WebSocket.Foreign
+  ( module Reflex.Dom.WebSocket.Foreign
+  , JSVal
+  ) where
+
+import Prelude hiding (all, concat, concatMap, div, mapM, mapM_, sequence, span)
+
+import Control.Lens ((^.))
+import Data.Bifoldable
+import Data.ByteString (ByteString)
+import qualified Data.ByteString.Lazy as LBS
+import Data.Text (Text)
+import Data.Text.Encoding
+import Foreign.JavaScript.Utils (bsFromMutableArrayBuffer, bsToArrayBuffer)
+import GHCJS.DOM.CloseEvent
+import GHCJS.DOM.MessageEvent
+import GHCJS.DOM.Types (JSM, JSVal, liftJSM, fromJSValUnchecked, WebSocket(..))
+import qualified GHCJS.DOM.WebSocket as DOM
+import GHCJS.Foreign (JSType(..), jsTypeOf)
+import Language.Javascript.JSaddle (fun, new, jsg, js2, jss)
+import qualified Data.Text as T
+import Language.Javascript.JSaddle.Helper (mutableArrayBufferFromJSVal)
+import qualified Data.Text as T
+import Language.Javascript.JSaddle.Types (ghcjsPure)
+import qualified Data.Text as T
+
+newtype JSWebSocket = JSWebSocket { unWebSocket :: WebSocket }
+
+class IsWebSocketMessage a where
+  webSocketSend :: JSWebSocket -> a -> JSM ()
+
+instance (IsWebSocketMessage a, IsWebSocketMessage b) => IsWebSocketMessage (Either a b) where
+  webSocketSend jws = bitraverse_ (webSocketSend jws) (webSocketSend jws)
+
+-- Use binary websocket communication for ByteString
+-- Note: Binary websockets may not work correctly in IE 11 and below
+instance IsWebSocketMessage ByteString where
+  webSocketSend (JSWebSocket ws) bs = do
+    ab <- bsToArrayBuffer bs
+    DOM.send ws ab
+
+instance IsWebSocketMessage LBS.ByteString where
+  webSocketSend ws = webSocketSend ws . LBS.toStrict
+
+-- Use plaintext websocket communication for Text, and String
+instance IsWebSocketMessage Text where
+  webSocketSend (JSWebSocket ws) = DOM.sendString ws
+
+closeWebSocket :: JSWebSocket -> Word -> Text -> JSM ()
+closeWebSocket (JSWebSocket ws) code reason = DOM.close ws (Just code) (Just reason)
+
+newWebSocket
+  :: Text -- url
+  -> [Text] -- protocols
+  -> (Either ByteString JSVal -> JSM ()) -- onmessage
+  -> JSM () -- onopen
+  -> JSM () -- onerror
+  -> ((Bool, Word, Text) -> JSM ()) -- onclose
+  -> JSM JSWebSocket
+newWebSocket url protocols onMessage onOpen onError onClose = do
+  let onOpenWrapped = fun $ \_ _ _ -> onOpen
+      onErrorWrapped = fun $ \_ _ _ -> onError
+      onCloseWrapped = fun $ \_ _ (e:_) -> do
+        let e' = CloseEvent e
+        wasClean <- getWasClean e'
+        code <- getCode e'
+        reason <- getReason e'
+        liftJSM $ onClose (wasClean, code, reason)
+      onMessageWrapped = fun $ \_ _ (e:_) -> do
+        let e' = MessageEvent e
+        d <- getData e'
+        liftJSM $ ghcjsPure (jsTypeOf d) >>= \case
+          String -> onMessage $ Right d
+          _ -> do
+            ab <- mutableArrayBufferFromJSVal d
+            bsFromMutableArrayBuffer ab >>= onMessage . Left
+  ws <- new (jsg ("WebSocket" :: T.Text)) (url, protocols)
+  ws ^. jss ("binaryType" :: T.Text) ("arraybuffer" :: T.Text)
+  _ <- ws ^. js2 ("addEventListener" :: T.Text) ("open" :: T.Text) onOpenWrapped
+  _ <- ws ^. js2 ("addEventListener" :: T.Text) ("error" :: T.Text) onErrorWrapped
+  _ <- ws ^. js2 ("addEventListener" :: T.Text) ("close" :: T.Text) onCloseWrapped
+  _ <- ws ^. js2 ("addEventListener" :: T.Text) ("message" :: T.Text) onMessageWrapped
+  return $ JSWebSocket $ WebSocket ws
+
+onBSMessage :: Either ByteString JSVal -> JSM ByteString
+onBSMessage = either return $ fmap encodeUtf8 . fromJSValUnchecked

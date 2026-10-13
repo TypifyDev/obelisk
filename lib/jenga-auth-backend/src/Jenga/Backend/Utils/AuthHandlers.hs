@@ -19,7 +19,7 @@ import Rhyolite.Account
 import Web.ClientSession as CS
 
 import Snap
-import Jenga.Snap.Extras (writeJSON)
+import qualified Data.Aeson as Aeson
 import Database.Beam.Schema
 import Database.Beam.Postgres
 import Database.Beam.Backend.SQL.Types (SqlSerial(..))
@@ -27,6 +27,8 @@ import Data.Signed
 import Data.Signed.ClientSession as CSK
 
 import Data.Pool
+import Control.Monad.Trans.Class
+import Control.Monad.Trans.Reader
 import Control.Monad.Catch
 import Control.Monad.IO.Class
 import qualified Data.Aeson as A
@@ -37,9 +39,6 @@ import qualified Data.Text as T
 import qualified Data.Text.Encoding as T
 import qualified Data.ByteString.Base64 as B64
 import qualified Data.ByteString as BS
-
-import Effectful (Eff, (:>), IOE)
-import Effectful.Reader.Static ()
 
 
 -- | This is currently a toss up as we switch from an old semi-broken system
@@ -60,21 +59,20 @@ removeQuotesBS =
 
 --- Cookie Authentication Handlers
 
--- | Authenticate via cookie and run the given action.
--- Takes explicit Key and AuthCookieName since it runs in MonadSnap.
 privateRoute
-  :: forall m a.
+  :: forall cfg m a.
      ( A.ToJSON a
      , MonadSnap m
+     , HasConfig cfg AuthCookieName
+     , HasConfig cfg CS.Key
      )
-  => AuthCookieName
-  -> CS.Key
-  -> (Id Account -> m a)
-  -> m ()
-privateRoute (AuthCookieName authCookieName) key fma = do
-  let writeJSON'' :: MonadSnap m1 => Either (BackendError ()) () -> m1 ()
-      writeJSON'' = writeJSON
+  => (Id Account -> ReaderT cfg m a)
+  -> ReaderT cfg m ()
+privateRoute fma = do
+  let writeJSON'' :: MonadSnap m => Either (BackendError ()) () -> ReaderT cfg m ()
+      writeJSON'' = lift . writeJSON
 
+  authCookieName <- getAuthCookieName <$> asksM
   mCookie <- liftSnap $ getCookie $ T.encodeUtf8 authCookieName
 
   case mCookie of
@@ -84,11 +82,60 @@ privateRoute (AuthCookieName authCookieName) key fma = do
         --removeQuotes = T.init . (T.drop 1) -- TODO: why does this happen ?
         signed :: Signed (PrimaryKey Rhyolite.Account.Account Identity)
         signed = Signed . removeQuotes . T.decodeUtf8 . (fromRight undefined) . B64.decode . cookieValue $ cookie
+      key <- asksM --  _clientSessionKey
       case readSignedWithKey key signed of
         Nothing -> writeJSON'' $ (Left NoAuth_CantReadKey)
         Just acctId -> do
           _ <- fma acctId -- AcctID $ fromIntegral int64
           pure ()
+
+-- setAuthCookieHeader :: MonadSnap m => Signed AccountId -> EnvT m ()
+-- setAuthCookieHeader signedTokenUserID = do
+--   --host <- decideHost
+--   baseRoute <- asksCfg _baseRoute
+--   let cookieValue_ = B64.encode . T.encodeUtf8 . unSigned $ signedTokenUserID
+--   -- ace in case we change our domain... this should more likely than not still work
+--   case T.isInfixOf "ace" (T.pack . show $ baseRoute) of
+--     True -> do
+--       let h = T.encodeUtf8
+--               . T.strip
+
+--               . T.pack
+--               . fromMaybe (error "will never fire")
+--               . uriHost $ baseRoute
+--       Snap.modifyResponse $ Snap.setHeader "Set-Cookie"
+--         $ T.encodeUtf8 authCookieName
+--         <> "=" <> cookieValue_ <> "; "
+--         <> "Path=/; "
+--         -- We need to set this no matter what if acetalent.io to
+--         -- ensure android and ios work properly
+--         <> "Domain=" <> h <> "; "
+--         <> "HttpOnly; Secure; SameSite=None"
+--     False -> do
+--       -- Either pure localhost or localhost via ngrok tunnel
+--       ngrok <- asksCfg _ngrokRoute
+--       case ngrok >>= uriHost of
+--         Nothing -> do
+--           Snap.modifyResponse $ Snap.setHeader "Set-Cookie"
+--             $ T.encodeUtf8 authCookieName
+--             <> "=" <> cookieValue_ <> "; "
+--             <> "Path=/; "
+--             -- Do we need the subdomain?
+--             -- <> "Domain=" <> "b674-207-136-101-252.ngrok-free.app" <> "; "
+--             <> "HttpOnly; Secure; SameSite=None"
+--         Just ngrokHost -> do
+--           Snap.modifyResponse $ Snap.setHeader "Set-Cookie"
+--             $ T.encodeUtf8 authCookieName
+--             <> "=" <> cookieValue_ <> "; "
+--             <> "Path=/; "
+--             -- Do we need the subdomain?
+--             <> "Domain=" <> (T.encodeUtf8 . T.pack $ ngrokHost) <> "; "
+--             <> "HttpOnly; Secure; SameSite=None"
+
+
+  -- originHeader <- Snap.getHeader "Origin" <$> getRequest
+  -- liftIO $ print originHeader
+
 
 
 -- | Is copy of privateRoute with allowed users
@@ -132,11 +179,13 @@ dependentPrivateRoute uTypeTbl (AuthCookieName authCookieName) dbConn key fma = 
 getAccountIdFromCookies
   :: ( A.ToJSON e
      , MonadSnap m
+     , HasConfig cfg CS.Key
+     , HasConfig cfg AuthCookieName
      )
-  => CS.Key
-  -> AuthCookieName
-  -> m (Either (BackendError e) AccountId)
-getAccountIdFromCookies cskey (AuthCookieName authCookieName) = do
+  => ReaderT cfg m (Either (BackendError e) AccountId)
+getAccountIdFromCookies = do
+  cskey <- asksM -- asksCfg _clientSessionKey
+  authCookieName <- getAuthCookieName <$> asksM
   mCookie <- getCookie $ T.encodeUtf8 authCookieName
   case mCookie of
     Nothing -> pure $ Left NoAuth_NoCookie
@@ -157,20 +206,22 @@ getAccountIdFromCookies cskey (AuthCookieName authCookieName) = do
 
 -- | is copy of privateRoute with allowed users
 constrainedPrivateRoute
-  :: forall db m a.
+  :: forall db cfg m a.
      ( MonadSnap m
      , Database Postgres db
+     , HasConfig cfg CS.Key
+     , HasConfig cfg AuthCookieName
+     , HasJengaTable Postgres db UserTypeTable
      )
-  => PgTable Postgres db UserTypeTable
-  -> AuthCookieName
-  -> Pool Connection
+  => Pool Connection
   -> Key
   -> NonEmpty.NonEmpty UserType
-  -> (Id Account -> m a)
-  -> m ()
-constrainedPrivateRoute uTypeTbl (AuthCookieName authCookieName) dbConn key userTypesAllowed fma = do
+  -> (Id Account -> ReaderT cfg m a)
+  -> ReaderT cfg m ()
+constrainedPrivateRoute dbConn key userTypesAllowed fma = do
   let writeJSON'' :: forall x e. (A.ToJSON x, A.ToJSON e) => Either (BackendError e) x -> Snap ()
       writeJSON'' = writeJSON
+  authCookieName <- getAuthCookieName <$> asksM
   mCookieAID <- getCookie $ T.encodeUtf8 authCookieName
   case mCookieAID of
     Nothing -> liftSnap $ do
@@ -186,6 +237,7 @@ constrainedPrivateRoute uTypeTbl (AuthCookieName authCookieName) dbConn key user
         -- we can run conditional logic on what to show the user
         -- but for safety we ask the type ourselves as the user could just enter in a fake one
         Just acctId@(AccountId (SqlSerial _)) -> do
+          (uTypeTbl :: PgTable Postgres db UserTypeTable) <- asksTableM
           userType' <- runSerializable dbConn $ getUserType uTypeTbl acctId
           case userType' of
             Nothing -> liftSnap $ writeJSON'' $ (Left NoAuth_NoUserTypeCookie :: Either (BackendError ()) ())
@@ -197,19 +249,20 @@ constrainedPrivateRoute uTypeTbl (AuthCookieName authCookieName) dbConn key user
                   pure ()
 
 privateRouteJSONOut
-  :: forall m a e.
+  :: forall cfg m a e.
      ( A.ToJSON a
      , A.ToJSON e
      , MonadSnap m
+     , HasConfig cfg AuthCookieName
      )
-  => AuthCookieName
-  -> Key
-  -> (Id Account -> m (Either (BackendError e) a))
-  -> m ()
-privateRouteJSONOut (AuthCookieName authCookieName) key fma = do
+  => Key
+  -> (Id Account -> ReaderT cfg m (Either (BackendError e) a))
+  -> ReaderT cfg m ()
+privateRouteJSONOut key fma = do
   let writeJSON'' :: forall x1 e1. (A.ToJSON x1, A.ToJSON e1)
         => Either (BackendError e1) x1 -> Snap ()
       writeJSON'' = writeJSON
+  authCookieName <- getAuthCookieName <$> asksM
   mCookie <- getCookie $ T.encodeUtf8 authCookieName
   case mCookie of
     Nothing -> do
@@ -225,29 +278,33 @@ privateRouteJSONOut (AuthCookieName authCookieName) key fma = do
           a <- fma acctId
           liftSnap $ writeJSON'' a
 
-type HasAdminReporting cfg es db n =
+type HasAdminReporting be cfg db n =
   ( HasJengaTable Postgres db LogItemRow
   , HasJengaTable Postgres db SendEmailTask
-  , Reader cfg :> es, HasConfig cfg (Pool Connection)
-  , Reader cfg :> es, HasConfig cfg AdminEmail
-  , IOE :> es
+  , HasConfig cfg (Pool Connection)
+  , HasConfig cfg AdminEmail
+  , HasJsonNotifyTbl be SendEmailTask n
   )
 
 wsRequestAuth
-  :: forall db cfg es be n e a.
-     ( IOE :> es
-     , MonadCatch (Eff es)
+  :: forall db cfg be n e m a.
+     ( MonadIO m
+     , MonadCatch m
      , Show e
      , SpecificError (BackendError e)
-     , Reader cfg :> es, HasConfig cfg CS.Key
-     , HasAdminReporting cfg es db n
-     , HasJsonNotifyTbl be SendEmailTask n
+     , HasConfig cfg CS.Key
+     , HasAdminReporting be cfg db n
      )
   => Signed (Id Account)
-  -> (Id Account -> Eff es (Either (BackendError e) a))
-  -> Eff es (Either (BackendError e) a)
+  -> (Id Account -> ReaderT cfg m (Either (BackendError e) a))
+  -> ReaderT cfg m (Either (BackendError e) a)
 wsRequestAuth authToken k = do
-  csk <- asksM @CS.Key @cfg
+  csk <- asksM
   case readSignedWithKey csk authToken of
-    Just user -> withErrorReporting @db @cfg $ k user
+    Just user -> withErrorReporting @db $ k user
     Nothing -> pure . Left $ NoAuth
+
+writeJSON :: (Aeson.ToJSON a, MonadSnap m) => a -> m ()
+writeJSON x = do
+  modifyResponse $ setContentType "application/json"
+  writeLBS (Aeson.encode x)

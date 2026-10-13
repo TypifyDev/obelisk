@@ -147,10 +147,7 @@ library
                     , jenga-generated-static
                     , containers
                     , data-default
-                    , jenga-route-servant
-                    , reflex
-                    , reflex-dom
-                    , reflex-dom-core
+                    , jenga-route
                     , ClasshSS
                     , effectful-core
                     , ghc-typelits-natnormalise
@@ -158,7 +155,7 @@ library
                     , grid-effect
                     , lens
                     , reflex-classhss
-                    , reflex-effectful
+                    , reflex-dom-core-effectful
                     , text
 
     if !(arch(javascript) || arch(wasm32))
@@ -197,8 +194,7 @@ executable frontend
                     , base
                       --
                     , containers
-                    , jenga-route-servant
-                    , reflex-dom
+                    , jenga-route
     if !(arch(wasm32) || arch(javascript))
       build-depends:    jsaddle-warp
     if arch(wasm32)

@@ -11,7 +11,7 @@ module Jenga.Common.OAuth where
 import Data.Aeson
 import Data.Text (Text)
 import Data.Int (Int64)
-import Data.Kind (Constraint, Type)
+import Data.Kind (Type, Constraint)
 import GHC.Generics
 import Database.Beam
 

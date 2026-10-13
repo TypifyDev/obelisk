@@ -1,5 +1,6 @@
 module Jenga.Backend.Handlers.Auth.OrgBased.RedeemLink where
 
+import Effectful.Reader.Static (Reader)
 import Jenga.Backend.DB.OrgBased
 import Jenga.Backend.Utils.HasConfig
 import Jenga.Backend.Utils.HasTable
@@ -8,9 +9,13 @@ import Jenga.Backend.Utils.Email
 import Jenga.Common.Errors
 import Jenga.Common.Auth
 import Jenga.Common.Schema
+import Jenga.Common.Company (CompanyInfo)
+import Data.Maybe (fromMaybe)
 
 import Rhyolite.Account
 import Jenga.Route
+import Jenga.Route.Servant (HasRoute)
+import Data.Proxy (Proxy)
 import Database.Beam.Postgres
 import Database.Beam.Schema
 
@@ -35,9 +40,11 @@ redeemLinkHandler
      , Reader cfg :> es, HasConfig cfg (Pool Connection)
      , HasRoute api (R frontendRoute)
      , HasJengaTable Postgres db InviteLink
+     , HasJengaTable Postgres db CompanyInfo
+     , HasConfig cfg (Jenga.Backend.Utils.HasConfig.FullRouteEncoder api frontendRoute)
      , HasJengaTable Postgres db Account
      , HasJengaTable Postgres db UserTypeTable
-     , HasJengaTable Postgres db OrganizationEmails
+     , HasJengaTable Postgres db OrgOwnedUsers
      , HasJengaTable Postgres db SendEmailTask
      , HasJsonNotifyTbl be SendEmailTask n
      )
@@ -49,10 +56,13 @@ redeemLinkHandler
 redeemLinkHandler proxy (codeLink, Email email) resetRoute mkEmail = do
   (inviteTbl :: PgTable Postgres db InviteLink) <- asksTableM
 
-  withDbEnv @cfg (getInviteLinkByCode inviteTbl codeLink) >>= \case
+  withDbEnvE @cfg (getInviteLinkByCode inviteTbl codeLink) >>= \case
     Nothing -> pure $ Left . BUserError $ NoOrgCode_RedeemLink
     Just (InviteLink orgName code' mNLeft)
-      | mNLeft == (Just 0) -> pure $ Left . BUserError $ CreditsDepleted orgName
+      | mNLeft == (Just 0) -> do
+          let companyTbl = tableRef :: PgTable Postgres db CompanyInfo
+          mName <- withDbEnvE @cfg (getOrgName companyTbl orgName)
+          pure $ Left . BUserError $ CreditsDepleted (fromMaybe "" mName)
       | otherwise -> do
           case validate . T.encodeUtf8 $ email of
             Left _ -> pure $ Left . BUserError $ InvalidEmail_RedeemLink
@@ -62,5 +72,5 @@ redeemLinkHandler proxy (codeLink, Email email) resetRoute mkEmail = do
                 Right () -> do
                   case mNLeft of
                     Nothing -> pure ()
-                    Just nLeft -> withDbEnv @cfg $ setLinkNumLeft inviteTbl code' (nLeft - 1)
+                    Just nLeft -> withDbEnvE @cfg $ setLinkNumLeft inviteTbl code' (nLeft - 1)
                   pure $ Right ()

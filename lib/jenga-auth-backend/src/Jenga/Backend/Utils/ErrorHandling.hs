@@ -7,35 +7,39 @@ import Jenga.Backend.Utils.Email
 import Jenga.Backend.Utils.Log
 import Jenga.Backend.Utils.HasTable
 import Jenga.Backend.Utils.HasConfig
+import Control.Monad.Trans.Reader
+-- import Backend.Config
+-- import Backend.Utils.Email
+-- import Backend.Utils.Log
+-- import Common.Types (LogItem(..))
 import Reflex.Dom.Core
 import Database.Beam.Postgres (Connection, Postgres)
 import Data.Pool
 import Control.Monad
 import Control.Monad.Catch
-import Control.Monad.IO.Class ()
+import Control.Monad.IO.Class
 import qualified Data.Text as T
-
-import Effectful (Eff, (:>), IOE)
-import Effectful.Reader.Static ()
+import Effectful (Eff, IOE, (:>))
+import qualified Effectful.Reader.Static as ER
 
 
 withErrorReporting
-  :: forall db cfg es be n e a.
-     ( IOE :> es
-     , MonadCatch (Eff es)
+  :: forall db cfg be n e m a.
+     ( MonadIO m
+     , MonadCatch m
      , Show e
      , SpecificError (BackendError e)
-     , Reader cfg :> es, HasConfig cfg AdminEmail
-     , Reader cfg :> es, HasConfig cfg (Pool Connection)
+     , HasConfig cfg AdminEmail
+     , HasConfig cfg (Pool Connection)
      , HasJengaTable Postgres db SendEmailTask
      , HasJengaTable Postgres db LogItemRow
      , HasJsonNotifyTbl be SendEmailTask n
      )
-  => Eff es (Either (BackendError e) a)
-  -> Eff es (Either (BackendError e) a)
+  => ReaderT cfg m (Either (BackendError e) a)
+  -> ReaderT cfg m (Either (BackendError e) a)
 withErrorReporting mE =  do
   --result :: (Either SomeException (Either (BackendError e) a)) <- try mE
-  tryBE mE >>= reportWhenError @db @cfg
+  tryBE mE >>= reportWhenError @db
   -- result <- tryBE mE
   -- reportWhenError $ joinError result
 
@@ -55,52 +59,126 @@ instance Loggable SomeError where
   renderLog (SomeError x) = x
 
 reportWhenError
-  :: forall db cfg es be n e a.
-     ( IOE :> es
+  :: forall db cfg be n e m a.
+     ( MonadIO m
      , Show e
      , SpecificError (BackendError e)
-     , Reader cfg :> es, HasConfig cfg AdminEmail
-     , Reader cfg :> es, HasConfig cfg (Pool Connection)
+     , HasConfig cfg AdminEmail
+     , HasConfig cfg (Pool Connection)
      , HasJengaTable Postgres db SendEmailTask
      , HasJengaTable Postgres db LogItemRow
      , HasJsonNotifyTbl be SendEmailTask n
      )
-  => (Either (BackendError e) a) -> Eff es (Either (BackendError e) a)
+  => (Either (BackendError e) a) -> ReaderT cfg m (Either (BackendError e) a)
 reportWhenError = \case
   Right a -> pure $ Right a
   Left (BException s) -> do
     let err = BException s
-    adminEmail <- getAdminEmail <$> asksM @AdminEmail @cfg
-    void $ newEmailHtml @db @cfg [adminEmail] "BException" $ do
+    adminEmail <- getAdminEmail <$> asksM
+    void $ newEmailHtml @db [adminEmail] "BException" $ do
       text . T.pack . show $ err
     pure $ Left err
   Left (BCritical e) -> do
     let err = BCritical e
-    adminEmail <- getAdminEmail <$> asksM @AdminEmail @cfg
-    void $ newEmailHtml @db @cfg [adminEmail] "BCritical" $ do
+    adminEmail <- getAdminEmail <$> asksM
+    void $ newEmailHtml @db [adminEmail] "BCritical" $ do
       text . T.pack . show $ err
     pure $ Left err
   Left (BUserError e) -> do
     let err = BUserError e
-    reportLog @db @cfg False $ SomeError $ T.pack $ show err
+    reportLog @db False $ SomeError $ T.pack $ show err
     pure $ Left err
   Left (BInvalidRequest e) -> do
     let err = BInvalidRequest e
-    reportLog @db @cfg False $ SomeError $ T.pack . show $ err
+    reportLog @db False $ SomeError $ T.pack . show $ err
     pure $ Left err
   Left NoAuth -> do
     let err = NoAuth
-    reportLog @db @cfg False $ SomeError "NoAuth"
+    reportLog @db False $ SomeError "NoAuth"
     pure $ Left err
   Left NoAuth_NoCookie -> do
     let err = NoAuth
-    reportLog @db @cfg False $ SomeError "NoAuth_NoCookie"
+    reportLog @db False $ SomeError "NoAuth_NoCookie"
     pure $ Left err
   Left NoAuth_CantReadKey -> do
     let err = NoAuth
-    reportLog @db @cfg False $ SomeError "NoAuth_CantReadKey"
+    reportLog @db False $ SomeError "NoAuth_CantReadKey"
     pure $ Left err
   Left NoAuth_NoUserTypeCookie -> do
     let err = NoAuth
-    reportLog @db @cfg False $ SomeError "NoAuth_CantReadKey"
+    reportLog @db False $ SomeError "NoAuth_CantReadKey"
+    pure $ Left err
+
+-- | Effectful port of 'withErrorReporting'. Wraps an 'Eff' action
+-- that may throw IO exceptions or return a 'BackendError', catches
+-- the exceptions into 'BException', and routes the resulting
+-- 'Either (BackendError e) a' through 'reportWhenErrorE' for admin
+-- notification / logging.
+withErrorReportingE
+  :: forall db cfg be n e es a.
+     ( IOE :> es
+     , ER.Reader cfg :> es
+     , Show e
+     , SpecificError (BackendError e)
+     , HasConfig cfg AdminEmail
+     , HasConfig cfg (Pool Connection)
+     , HasJengaTable Postgres db SendEmailTask
+     , HasJengaTable Postgres db LogItemRow
+     , HasJsonNotifyTbl be SendEmailTask n
+     )
+  => Eff es (Either (BackendError e) a)
+  -> Eff es (Either (BackendError e) a)
+withErrorReportingE mE = tryBE mE >>= reportWhenErrorE @db @cfg @be @n
+
+-- | Effectful port of 'reportWhenError'.
+reportWhenErrorE
+  :: forall db cfg be n e es a.
+     ( IOE :> es
+     , ER.Reader cfg :> es
+     , Show e
+     , SpecificError (BackendError e)
+     , HasConfig cfg AdminEmail
+     , HasConfig cfg (Pool Connection)
+     , HasJengaTable Postgres db SendEmailTask
+     , HasJengaTable Postgres db LogItemRow
+     , HasJsonNotifyTbl be SendEmailTask n
+     )
+  => Either (BackendError e) a -> Eff es (Either (BackendError e) a)
+reportWhenErrorE = \case
+  Right a -> pure $ Right a
+  Left (BException s) -> do
+    let err = BException s
+    adminEmail <- getAdminEmail <$> asksME @AdminEmail @cfg
+    void $ newEmailHtmlE @db @Postgres @cfg @n [adminEmail] "BException" $ do
+      text . T.pack . show $ err
+    pure $ Left err
+  Left (BCritical e) -> do
+    let err = BCritical e
+    adminEmail <- getAdminEmail <$> asksME @AdminEmail @cfg
+    void $ newEmailHtmlE @db @Postgres @cfg @n [adminEmail] "BCritical" $ do
+      text . T.pack . show $ err
+    pure $ Left err
+  Left (BUserError e) -> do
+    let err = BUserError e
+    reportLogE @db @cfg False $ SomeError $ T.pack $ show err
+    pure $ Left err
+  Left (BInvalidRequest e) -> do
+    let err = BInvalidRequest e
+    reportLogE @db @cfg False $ SomeError $ T.pack . show $ err
+    pure $ Left err
+  Left NoAuth -> do
+    let err = NoAuth
+    reportLogE @db @cfg False $ SomeError "NoAuth"
+    pure $ Left err
+  Left NoAuth_NoCookie -> do
+    let err = NoAuth
+    reportLogE @db @cfg False $ SomeError "NoAuth_NoCookie"
+    pure $ Left err
+  Left NoAuth_CantReadKey -> do
+    let err = NoAuth
+    reportLogE @db @cfg False $ SomeError "NoAuth_CantReadKey"
+    pure $ Left err
+  Left NoAuth_NoUserTypeCookie -> do
+    let err = NoAuth
+    reportLogE @db @cfg False $ SomeError "NoAuth_CantReadKey"
     pure $ Left err

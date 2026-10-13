@@ -40,7 +40,7 @@ library
                , mmark-ext
                , network-uri
                , effectful-core
-               , jenga-route-servant
+               , jenga-route
                , obelisk-oauth-common
                , obelisk-oauth-backend
                , parsec
@@ -48,7 +48,8 @@ library
                , psql-simple-beam
                , psql-simple-class
                , random
-               , reflex-dom-core
+               , reflex
+               , reflex-dom-core-effectful
                , resource-pool
                , rhyolite-account-backend
                , rhyolite-account-types
@@ -59,12 +60,14 @@ library
                , signed-data-clientsession
                , snap
                , jenga-snap-extras
+               , snap-extras
                , stripe-core
                , stripe-haskell
                , text
                , these
                , time
-               -- , transformers
+               , mtl
+               , transformers
                , vector
                , template-haskell
                , lamarckian
@@ -97,6 +100,7 @@ library
 
     Jenga.Backend.Handlers.Auth.Login
     Jenga.Backend.Handlers.Auth.OAuth
+    Jenga.Backend.Handlers.Auth.OAuth.Error
     Jenga.Backend.Handlers.Auth.RequestPasswordReset
     Jenga.Backend.Handlers.Auth.ResetPassword
     Jenga.Backend.Handlers.Auth.UserSignup

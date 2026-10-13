@@ -19,7 +19,8 @@ library
                , mime-mail
                , mime-mail-orphans
                , effectful-core
-               , jenga-route-servant
+               , jenga-route
+               , mtl
                , rhyolite-account-types
                , signed-data
                , stripe-core
@@ -30,11 +31,11 @@ library
 
   exposed-modules:
         Jenga.Common.Auth
+        Jenga.Common.Errors
         Jenga.Common.OAuth
         Jenga.Common.BeamExtras
         Jenga.Common.Schema
         Jenga.Common.Cookie
-        Jenga.Common.Errors
         Jenga.Common.HasJengaConfig
         Jenga.Common.ScrubPrefix
         Jenga.Common.Stripe
@@ -55,5 +56,8 @@ library
       RecursiveDo
       TemplateHaskell
       TypeFamilies
+      UndecidableInstances
+      FlexibleContexts
+      StandaloneDeriving
       AllowAmbiguousTypes
       DefaultSignatures

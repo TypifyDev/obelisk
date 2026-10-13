@@ -19,7 +19,8 @@ import Data.Time.Clock
 import Data.Functor.Identity
 
 import Effectful (Eff, (:>), IOE)
-import Effectful.Reader.Static ()
+import Effectful.Reader.Static (Reader)
+import qualified Effectful.Reader.Static as ER
 
 isFreeTrialExpiredHandler
   :: forall db cfg es.
@@ -32,9 +33,9 @@ isFreeTrialExpiredHandler
   => Id Account
   -> Eff es (Either (BackendError ()) Bool)
 isFreeTrialExpiredHandler acctID = do
-  freeTrialInfo <- asksM @FreeTrialInfo @cfg
+  freeTrialInfo <- ER.asks (fromCfg :: cfg -> FreeTrialInfo)
   (freeTrialTbl :: PgTable Postgres db FreeTrial) <- asksTableM
-  (withDbEnv @cfg $ lookupFreeTrial freeTrialTbl acctID) >>= \case
+  (withDbEnvE @cfg $ lookupFreeTrial freeTrialTbl acctID) >>= \case
     Nothing -> pure $ Right False
     Just freeTrial -> do
       case (== getFreeTrialCode freeTrialInfo) <$> _freeTrial_discountCode freeTrial of

@@ -73,7 +73,7 @@ import           Snap.Http.Server (quickHttpServe)
 import qualified Snap.Util.FileServe as Snap
 import qualified Jenga.Asset.Serve.Snap as JengaAsset
 
-import           Jenga.Route (HasRoute(..), PageName, urlToSegments)
+import           Jenga.Route.Servant (HasRoute(..), PageName, urlToSegments)
 import           Jenga.Frontend (Frontend(..), renderFrontendHtml)
 import           Servant.Server (serveSnap, serveSnapWithContext)
 
@@ -89,7 +89,7 @@ data Backend api r = Backend
   { _backend_apiHandler :: !(Snap ())
     -- ^ Snap handler for API routes (mounted under /api/).
     -- Built from servant-snap or hand-written Snap handlers.
-  , _backend_frontend :: !(Frontend api r)
+  , _backend_frontend :: !(Frontend r)
     -- ^ The frontend, used for SSR on initial page load.
   , _backend_fallbackRoute :: !r
     -- ^ Route to render for unrecognized URLs (404 → home page)

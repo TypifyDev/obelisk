@@ -1,8 +1,13 @@
+{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TypeApplications #-}
+{-# LANGUAGE TypeOperators #-}
+{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
+-- | MTL config accessors.
 module Jenga.Common.HasJengaConfig
-  ( -- * Effectful config access (replaces HasConfig + ReaderT)
-    askConfig
-
-    -- * Config newtypes
+  ( HasConfig(..)
+  , MkRoute
+  , asksM
   , BaseURL(..)
   , DomainOption(..)
   , AuthCookieName(..)
@@ -17,30 +22,24 @@ module Jenga.Common.HasJengaConfig
   , DiscordOAuthClientID(..)
   , DiscordOAuthClientSecret(..)
   , FreeTrialInfo(..)
+  -- , FullRouteEncoder -- parked: use canonical Jenga.Route.FullRouteEncoder instead
+  , IEncoder
   , StripeCode(..)
   , Plans(..)
-
-    -- * Config utilities
   , getJsonConfigBase
   , getJsonConfig
-
-    -- * Route rendering
   , renderFullRouteBE
   , renderFullRouteFE
+  -- * Strong witness to the contained text being a valid link
   , Link(..)
-
-    -- * Env checks
+  -- * Unwrap smart constructor
   , isLocalHostEnv
+  , isLocalHostEnvE
   , lookupSubscriptionCodeEnv
   , matchesCompanyCodeEnv
-
-    -- * Legacy compatibility
-  , HasConfig(..)
-  , asksM
-  , MkRoute
-
-    -- * Re-exports
-  , Reader
+  , asksME
+  , lookupSubscriptionCodeEnvE
+  , matchesCompanyCodeEnvE
   )
 where
 
@@ -48,55 +47,35 @@ import Data.Time.Clock
 import qualified Control.Monad.Fail as Fail
 import Data.Aeson
 import qualified Data.Text as T
+import Data.Functor.Identity
 import qualified Data.Map as Map
 import qualified Data.ByteString as BS
+import Jenga.Route as ObR
+import Control.Monad.Reader
+import Effectful (Eff, (:>))
+import qualified Effectful.Reader.Static as ER
 import Network.URI
 import Control.Applicative
 import GHC.Generics
 
-import Effectful (Eff, (:>))
-import Effectful.Reader.Static (Reader, ask)
-
-import Jenga.Route (HasRoute(..), renderRoute)
-import Data.Proxy (Proxy)
-
--- | Constraint synonym for handlers/renderers that need base URL access
--- when constructing links back to the application. The @br@ / @fr@ type
--- parameters are phantom in the servant-based routing world (jenga-route
--- doesn't expose an Encoder type here) but are retained for signature
--- compatibility with pre-servant consumers.
-type MkRoute cfg br fr = HasConfig cfg BaseURL
-
--- ─── Effectful config access ─────────────────────────────────
-
--- ─── HasConfig class ─────────────────────────────────────────
-
--- | Extract a capability from a config record.
---
--- Used with @Reader cfg :> es@ to get typed config values:
---
--- @
--- handler :: (Reader cfg :> es, HasConfig cfg BaseURL, HasConfig cfg (Pool Connection))
---         => Eff es ()
--- handler = do
---   BaseURL url <- asksM
---   pool <- asksM
--- @
 class HasConfig a b where
   fromCfg :: a -> b
 
--- | Ask for a config value by extracting it from the Reader environment.
---
--- Drop-in replacement for the old @ReaderT cfg m@ version.
-asksM :: forall x cfg es. (Reader cfg :> es, HasConfig cfg x) => Eff es x
-asksM = fromCfg @cfg @x <$> ask @cfg
+type MkRoute cfg be fe =
+  ( HasConfig cfg (FullRouteEncoder be fe)
+  , HasConfig cfg BaseURL
+  )
 
--- | Synonym for 'asksM'.
-askConfig :: forall x cfg es. (Reader cfg :> es, HasConfig cfg x) => Eff es x
-askConfig = asksM @x @cfg
+asksM
+  :: forall x cfg m. (HasConfig cfg x, MonadReader cfg m) => m x
+asksM = asks fromCfg
 
--- ─── Config newtypes ─────────────────────────────────────────
+-- | Effectful port of 'asksM'.
+asksME
+  :: forall x cfg es. (HasConfig cfg x, ER.Reader cfg :> es) => Eff es x
+asksME = ER.asks (fromCfg :: cfg -> x)
 
+-- for type self-documentation
 newtype BaseURL = BaseURL { getBaseURL :: URI }
 newtype AuthCookieName = AuthCookieName { getAuthCookieName :: T.Text }
 newtype UserTypeCookieName = UserTypeCookieName { getUserTypeCookieName :: T.Text }
@@ -113,75 +92,109 @@ data FreeTrialInfo = FreeTrialInfo
   { getFreeTrialCode :: T.Text
   , getFreeTrialLength :: NominalDiffTime
   } deriving (Eq, Ord)
+-- type FullRouteEncoder be fe = IEncoder (ObR.R (FullRoute be fe)) PageName
+-- parked: use canonical Jenga.Route.FullRouteEncoder instead; this local alias
+-- caused ambiguous-occurrence errors at every downstream consumer that imported
+-- both Jenga.Route and Jenga.Common.HasJengaConfig.
+type IEncoder a b = Encoder Identity Identity a b
 
-newtype StripeCode = StripeCode T.Text
-
-data Plans = Plans
-  { defaultPlan :: Maybe StripePlan
-  , getPlans :: Map.Map SubscribeHash StripePlan
-  }
-
--- ─── JSON config parsing ─────────────────────────────────────
 
 getJsonConfigBase :: FromJSON a => T.Text -> Map.Map T.Text BS.ByteString -> (Maybe (Either String a))
 getJsonConfigBase key cfgs = fmap eitherDecodeStrict' $ cfgs Map.!? key
 
+-- | Get and parse a json configuration
 getJsonConfig :: (FromJSON a, Fail.MonadFail m) => T.Text -> Map.Map T.Text BS.ByteString -> m a
 getJsonConfig k cfgs = case getJsonConfigBase k cfgs of
   Nothing -> Fail.fail $ "getJsonConfig missing key: " <> T.unpack k
   Just (Left err) -> Fail.fail $ "getJsonConfig invalid for key " <> T.unpack k <> " : " <> err
   Just (Right val) -> pure val
 
--- ─── Route rendering (using servant routing) ─────────────────
-
--- | Render a backend route as a full URL.
 renderFullRouteBE
-  :: forall api r cfg es.
-     ( HasRoute api r
-     , Reader cfg :> es, HasConfig cfg BaseURL
+  :: forall fe be cfg m.
+     ( MonadReader cfg m
+     , HasConfig cfg (FullRouteEncoder be fe)
+     , HasConfig cfg BaseURL
      )
-  => Proxy api
-  -> r
-  -> Eff es Link
-renderFullRouteBE proxy route = do
-  BaseURL baseUrl <- asksM @BaseURL @cfg
-  pure . Link $ (T.pack $ show baseUrl) <> renderRoute proxy route
+  => ObR.R be
+  -> m Link
+renderFullRouteBE route = do
+  (enc :: FullRouteEncoder be fe)  <- asksM -- _routeEncoder
+  BaseURL baseUrl <- asksM
+  pure . Link $ (T.pack $ show baseUrl) <> renderObeliskBackendRoute enc route
 
--- | Render a frontend route as a full URL.
 renderFullRouteFE
-  :: forall api r cfg es.
-     ( HasRoute api r
-     , Reader cfg :> es, HasConfig cfg BaseURL
+  :: forall be fe m cfg.
+     ( MonadReader cfg m
+     , HasConfig cfg (FullRouteEncoder be fe)
+     , HasConfig cfg BaseURL
      )
-  => Proxy api
-  -> r
-  -> Eff es Link
-renderFullRouteFE proxy route = renderFullRouteBE @api @r @cfg proxy route
+  => ObR.R fe
+  -> m Link
+renderFullRouteFE route = do
+  (enc :: FullRouteEncoder be fe)  <- asksM -- _routeEncoder
+  BaseURL baseUrl <- asksM
+  pure . Link $ (T.pack $ show baseUrl) <> renderObeliskFrontendRoute enc route
 
--- | Strong witness to the contained text being a valid link.
+-- Strong witness to the contained text being a valid link
 newtype Link = Link { getLink :: T.Text } deriving Generic
 instance ToJSON Link
 instance FromJSON Link
 
--- ─── Environment checks ──────────────────────────────────────
-
 isLocalHostEnv
-  :: forall cfg es. (Reader cfg :> es, HasConfig cfg BaseURL)
+  :: ( MonadReader cfg m
+     , HasConfig cfg (BaseURL)
+     )
+  => m Bool
+isLocalHostEnv = T.isPrefixOf "http://localhost:" . T.pack . show . getBaseURL <$> asksM
+
+-- | Effectful port of 'isLocalHostEnv'.
+isLocalHostEnvE
+  :: forall cfg es.
+     ( ER.Reader cfg :> es
+     , HasConfig cfg BaseURL
+     )
   => Eff es Bool
-isLocalHostEnv = T.isPrefixOf "http://localhost:" . T.pack . show . getBaseURL <$> asksM @BaseURL @cfg
+isLocalHostEnvE = T.isPrefixOf "http://localhost:" . T.pack . show . getBaseURL <$> asksME @BaseURL @cfg
+
+data Plans = Plans
+  { defaultPlan :: Maybe StripePlan
+  , getPlans :: Map.Map SubscribeHash StripePlan
+  }
 
 lookupSubscriptionCodeEnv
-  :: forall cfg es. (Reader cfg :> es, HasConfig cfg Plans)
+  :: ( MonadReader cfg m
+     , HasConfig cfg Plans
+     )
+  => Maybe T.Text
+  -> m (Maybe StripePlan)
+lookupSubscriptionCodeEnv codeAsked = do
+  plans <- asksM -- _subscriptionCodes (baseSubscription, codesMap)
+  pure $ (codeAsked >>= flip Map.lookup (getPlans plans) . SubscribeHash) <|> defaultPlan plans
+
+-- | Effectful port of 'lookupSubscriptionCodeEnv'.
+lookupSubscriptionCodeEnvE
+  :: forall cfg es. (ER.Reader cfg :> es, HasConfig cfg Plans)
   => Maybe T.Text
   -> Eff es (Maybe StripePlan)
-lookupSubscriptionCodeEnv codeAsked = do
-  plans <- asksM @Plans @cfg
+lookupSubscriptionCodeEnvE codeAsked = do
+  plans <- asksME @Plans @cfg
   pure $ (codeAsked >>= flip Map.lookup (getPlans plans) . SubscribeHash) <|> defaultPlan plans
 
 matchesCompanyCodeEnv
-  :: forall cfg es. (Reader cfg :> es, HasConfig cfg CompanySignupCode)
+  :: ( MonadReader cfg m
+     , HasConfig cfg CompanySignupCode
+     )
+  => T.Text
+  -> m Bool
+matchesCompanyCodeEnv c = (==c) . getCompanySignupCode <$>  asksM
+
+-- | Effectful port of 'matchesCompanyCodeEnv'.
+matchesCompanyCodeEnvE
+  :: forall cfg es. (ER.Reader cfg :> es, HasConfig cfg CompanySignupCode)
   => T.Text
   -> Eff es Bool
-matchesCompanyCodeEnv c = (==c) . getCompanySignupCode <$> asksM @CompanySignupCode @cfg
+matchesCompanyCodeEnvE c = (==c) . getCompanySignupCode <$> asksME @CompanySignupCode @cfg
+
+newtype StripeCode = StripeCode T.Text
 
 data DomainOption = ProxiedDomain T.Text T.Text | DirectDomain T.Text

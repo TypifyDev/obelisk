@@ -1,5 +1,7 @@
 module Jenga.Backend.Handlers.Auth.UserSignup where
 
+import Data.Kind (Type)
+import Effectful.Reader.Static (Reader)
 import Jenga.Backend.Utils.Account
 import Jenga.Backend.Utils.Email
 import Jenga.Backend.Utils.HasConfig
@@ -10,6 +12,8 @@ import Jenga.Common.Schema
 
 import Rhyolite.Account
 import Jenga.Route
+import Jenga.Route.Servant (HasRoute)
+import Data.Proxy (Proxy)
 import Network.Mail.Mime
 import Database.Beam
 import Database.Beam.Postgres
@@ -40,7 +44,7 @@ import Effectful.Reader.Static ()
 
 --let mkBody = body <> "\n" <> link -- plaintext emali
 userSignupHandler
-  :: forall api db cfg be frontendRoute es x n.
+  :: forall (api :: Type -> Type) db cfg be frontendRoute es x n.
      ( IOE :> es
      , Database Postgres db
      , Reader cfg :> es, HasConfig cfg CS.Key
@@ -48,9 +52,10 @@ userSignupHandler
      , HasRoute api (R frontendRoute)
      , Reader cfg :> es, HasConfig cfg BaseURL
      , Reader cfg :> es, HasConfig cfg AdminEmail
+     , HasConfig cfg (FullRouteEncoder api frontendRoute)
      , HasJengaTable Postgres db Account
      , HasJengaTable Postgres db UserTypeTable
-     , HasJengaTable Postgres db OrganizationEmails
+     , HasJengaTable Postgres db OrgOwnedUsers
      , HasJengaTable Postgres db SendEmailTask
      , HasJsonNotifyTbl be SendEmailTask n
      )
@@ -71,5 +76,5 @@ userSignupHandler proxy email resetRoute mkBody = do
               { addressName = Nothing
               , addressEmail = T.decodeUtf8 . toByteString $ email
               }
-          x <- newMkEmailHtml @db @cfg [to] $ mkBody link
+          x <- newMkEmailHtmlE @db @be @cfg @n [to] $ mkBody link
           pure $ first (\_ -> BCritical NoEmailSent) x

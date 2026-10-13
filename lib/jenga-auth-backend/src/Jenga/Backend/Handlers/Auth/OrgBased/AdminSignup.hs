@@ -1,5 +1,8 @@
 module Jenga.Backend.Handlers.Auth.OrgBased.AdminSignup where
 
+import Effectful.Reader.Static (Reader)
+import Jenga.Backend.DB.OrgBased (insertNewCompany)
+import Jenga.Common.Company (CompanyInfo)
 import Jenga.Backend.Utils.Account
 import Jenga.Backend.Utils.HasConfig
 import Jenga.Backend.Utils.HasTable
@@ -13,6 +16,8 @@ import Database.Beam
 import Database.Beam.Postgres
 import Rhyolite.Account
 import Jenga.Route
+import Jenga.Route.Servant (HasRoute)
+import Data.Proxy (Proxy)
 
 import Web.ClientSession as CS
 import Data.Pool
@@ -33,9 +38,11 @@ adminSignupHandler
      , Reader cfg :> es, HasConfig cfg AdminEmail
      , Reader cfg :> es, HasConfig cfg (Pool Connection)
      , HasRoute api (R frontendRoute)
+     , HasConfig cfg (FullRouteEncoder api frontendRoute)
      , HasJengaTable Postgres db Account
      , HasJengaTable Postgres db UserTypeTable
-     , HasJengaTable Postgres db OrganizationEmails
+     , HasJengaTable Postgres db OrgOwnedUsers
+     , HasJengaTable Postgres db CompanyInfo
      , HasJengaTable Postgres db SendEmailTask
      , HasJsonNotifyTbl Postgres SendEmailTask n
      )
@@ -45,10 +52,12 @@ adminSignupHandler
   -> (Link -> MkEmail x)
   -> Eff es (Either (BackendError AdminSignupError) ())
 adminSignupHandler proxy (NewCompanyEmail email orgName code) resetRoute mkEmail = do
-  matchesCompanyCodeEnv @cfg code >>= \case
+  matchesCompanyCodeEnvE @cfg code >>= \case
     False -> pure $ Left . BUserError $ InvalidAdminCode
     True -> do
-      createNewAccount @api @db @cfg proxy email (IsCompany orgName) resetRoute >>= \case
+      let companyTbl = tableRef :: PgTable Postgres db CompanyInfo
+      companyPk <- withDbEnvE @cfg $ insertNewCompany companyTbl orgName
+      createNewAccount @api @db @cfg proxy email (IsCompany companyPk) resetRoute >>= \case
         Left beErr -> pure $ Left $ fmap AdminSignupError $ beErr
         Right link -> do
           let
@@ -56,7 +65,7 @@ adminSignupHandler proxy (NewCompanyEmail email orgName code) resetRoute mkEmail
                  { addressName = Nothing
                  , addressEmail = T.decodeUtf8 . toByteString $ email
                  } -- recipients Address
-          eRes <- newMkEmailHtml @db @cfg [to] $ mkEmail link
+          eRes <- newMkEmailHtmlE @db @Postgres @cfg @n [to] $ mkEmail link
           case eRes of
             Left _ -> pure $ Left . BCritical . AdminSignupError $ NoEmailSent
             Right () -> do

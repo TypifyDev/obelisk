@@ -4,17 +4,21 @@ import Jenga.Backend.DB.Auth
 -- import Backend.DB
 
 -- import Backend.Utils.Log
-import Jenga.Backend.Utils.Snap
+import Jenga.Backend.Handlers.Auth.OAuth.Error (OAuthError (..))
 import Jenga.Backend.Utils.HasConfig
 import Jenga.Backend.Utils.HasTable
 import Jenga.Backend.Utils.Cookies (addAuthCookieHeader, addUserTypeCookieHeader)
 import Jenga.Common.Schema
 import Jenga.Common.OAuth
-import Jenga.Common.Auth
+import Jenga.Common.Auth hiding (OAuthError)
 import Jenga.Common.BeamExtras (Id)
 
 import Rhyolite.Account
+import Control.Monad.Trans.Reader (runReaderT)
+import Data.Kind (Type)
 import Jenga.Route
+import Jenga.Route.Servant (HasRoute)
+import Data.Proxy (Proxy)
 import Obelisk.OAuth.AccessToken (TokenGrant (..))
 import Obelisk.OAuth.Authorization (OAuth (..), RedirectUriParams (..))
 import qualified Network.HTTP.Client.MultipartFormData as Http
@@ -40,12 +44,13 @@ import qualified Data.Text.Encoding as T
 import qualified Text.Email.Validate as EmailValidate
 
 import Effectful (Eff, (:>), IOE)
-import Effectful.Reader.Static ()
+import Effectful.Reader.Static (Reader)
+import qualified Effectful.Reader.Static as ER
 
 -- | A pre-rendered redirect URI to hand back to an OAuth provider during the
 -- token-exchange step. Wrapping in a newtype makes it obvious at the call
 -- site that this is the caller's responsibility to construct correctly
--- (via jenga-route-servant, obelisk, or hand-rolled), and stops arbitrary
+-- (via Jenga.Route.Servant, obelisk, or hand-rolled), and stops arbitrary
 -- Text from being passed through by mistake.
 newtype RedirectUri = RedirectUri { unRedirectUri :: T.Text }
   deriving (Show, Eq)
@@ -81,7 +86,7 @@ oauthTokenRequest tokenUrl (RedirectUri redirectUri) clientId clientSecret grant
 -- | Helper function to handle OAuth login with email-based account lookup
 -- Validates email, creates or links account, and sets cookies
 handleOAuthLogin
-  :: forall api db cfg es frontendRoute oauthIdRow.
+  :: forall (api :: Type -> Type) db cfg es frontendRoute oauthIdRow.
      ( IOE :> es
      , Database Postgres db
      , Reader cfg :> es, HasConfig cfg AuthCookieName
@@ -90,6 +95,7 @@ handleOAuthLogin
      , Reader cfg :> es, HasConfig cfg CS.Key
      , Reader cfg :> es, HasConfig cfg (Pool Connection)
      , Reader cfg :> es, HasConfig cfg BaseURL
+     , HasConfig cfg (Jenga.Backend.Utils.HasConfig.FullRouteEncoder api frontendRoute)
      , HasRoute api (R frontendRoute)
      , HasJengaTable Postgres db Account
      , HasJengaTable Postgres db UserTypeTable
@@ -100,48 +106,54 @@ handleOAuthLogin
   -> (oauthIdRow -> Int64)  -- ^ Extract account ID from OAuth ID row
   -> (Id Account -> Eff es ())  -- ^ Insert new OAuth ID for account
   -> R frontendRoute  -- ^ Where to redirect after success
-  -> Eff es (Id Account, Snap ())
+  -> Eff es (Either OAuthError (Id Account, Snap ()))
 handleOAuthLogin proxy emailStr maybeOAuthID extractAccountId insertOAuthId redirectToRoute = do
   -- Validate email format
   case EmailValidate.validate (T.encodeUtf8 $ T.pack emailStr) of
-    Left _err -> error $ "Invalid email format from OAuth provider: " <> emailStr
+    Left _err ->
+      pure $ Left $ OAuthProviderError $
+        "Invalid email format from OAuth provider: " <> T.pack emailStr
     Right _validEmail -> do
-      accountID' <- case maybeOAuthID of
+      eAccountID <- case maybeOAuthID of
         Nothing -> do
           -- New user signup or link to existing account
           (acctsTbl :: PgTable Postgres db Account) <- asksTableM
 
           -- Check if account with this email already exists
-          maybeExistingAcct <- withDbEnv @cfg $ getUserByEmail acctsTbl (T.pack emailStr)
+          maybeExistingAcct <- withDbEnvE @cfg $ getUserByEmail acctsTbl (T.pack emailStr)
           liftIO $ print $ isJust maybeExistingAcct
           case maybeExistingAcct of
             -- Link to existing account
             Just existingAcct -> do
               let existingAccountId = pk existingAcct
               insertOAuthId existingAccountId
-              pure existingAccountId
+              pure $ Right existingAccountId
             -- Create new account
             Nothing -> do
-              accountID <- withDbEnv @cfg $ newAccount acctsTbl (Email $ T.pack emailStr) Nothing
+              accountID <- withDbEnvE @cfg $ newAccount acctsTbl (Email $ T.pack emailStr) Nothing
               case accountID of
-                Nothing -> error "Insert new account failed"
+                Nothing ->
+                  pure $ Left $ OAuthAccountNotFound "Insert new account failed"
                 Just aid -> do
                   insertOAuthId aid
                   -- Create user type for new OAuth user
                   (uTypeTbl :: PgTable Postgres db UserTypeTable) <- asksTableM
-                  withDbEnv @cfg $ putNewUserType uTypeTbl aid Nothing
-                  pure aid
+                  withDbEnvE @cfg $ putNewUserType uTypeTbl aid Nothing
+                  pure $ Right aid
 
         Just oauthIdRow -> do
           -- Existing user login
-          pure $ AccountId $ SqlSerial $ extractAccountId oauthIdRow
+          pure $ Right $ AccountId $ SqlSerial $ extractAccountId oauthIdRow
 
-      snapAction <- setCookiesAndRedirect @api @db @cfg proxy accountID' redirectToRoute
-      pure (accountID', snapAction)
+      case eAccountID of
+        Left err -> pure (Left err)
+        Right accountID' -> do
+          snapAction <- setCookiesAndRedirect @api @db @cfg proxy accountID' redirectToRoute
+          pure $ Right (accountID', snapAction)
 
 -- | Helper function to set both auth and user type cookies after OAuth login
 setCookiesAndRedirect
-  :: forall api db cfg es frontendRoute.
+  :: forall (api :: Type -> Type) db cfg es frontendRoute.
      ( IOE :> es
      , Database Postgres db
      , Reader cfg :> es, HasConfig cfg AuthCookieName
@@ -150,6 +162,7 @@ setCookiesAndRedirect
      , Reader cfg :> es, HasConfig cfg CS.Key
      , Reader cfg :> es, HasConfig cfg (Pool Connection)
      , Reader cfg :> es, HasConfig cfg BaseURL
+     , HasConfig cfg (Jenga.Backend.Utils.HasConfig.FullRouteEncoder api frontendRoute)
      , HasRoute api (R frontendRoute)
      , HasJengaTable Postgres db UserTypeTable
      )
@@ -157,46 +170,46 @@ setCookiesAndRedirect
   -> Id Account
   -> R frontendRoute
   -> Eff es (Snap ())
-setCookiesAndRedirect proxy accountID' redirectToRoute = do
+setCookiesAndRedirect _proxy accountID' redirectToRoute = do
   liftIO $ putStrLn $ "setCookiesAndRedirect called for account: " <> show accountID'
   (uTypeTbl :: PgTable Postgres db UserTypeTable) <- asksTableM
-  userType <- withDbEnv @cfg $ getUserType uTypeTbl accountID'
+  userType <- withDbEnvE @cfg $ getUserType uTypeTbl accountID'
 
   -- If user doesn't have a type, create one
   userType' <- case userType of
     Just uType -> pure uType
     Nothing -> do
       liftIO $ putStrLn $ "Creating missing user type for existing OAuth user: " <> show accountID'
-      withDbEnv @cfg $ putNewUserType uTypeTbl accountID' Nothing
+      withDbEnvE @cfg $ putNewUserType uTypeTbl accountID' Nothing
       pure Self
 
   liftIO $ putStrLn $ "About to set cookies for user type: " <> show userType'
-  userTypeCookieName <- getUserTypeCookieName <$> asksM @UserTypeCookieName @cfg
+  userTypeCookieName <- getUserTypeCookieName <$> ER.asks (fromCfg :: cfg -> UserTypeCookieName)
   liftIO $ putStrLn $ "User type cookie name: " <> show userTypeCookieName
-  domainOpts <- asksM @DomainOption @cfg
   liftIO $ putStrLn "User type cookie set, now setting auth cookie"
-  authCookieName <- getAuthCookieName <$> asksM @AuthCookieName @cfg
+  authCookieName <- getAuthCookieName <$> ER.asks (fromCfg :: cfg -> AuthCookieName)
   liftIO $ putStrLn $ "Auth cookie name: " <> show authCookieName
-  csk <- asksM @CS.Key @cfg
   liftIO $ putStrLn "Both cookies set, checking response headers before redirect"
 
-  link_ <- renderFullRouteFE @api @(R frontendRoute) @cfg @es proxy redirectToRoute
+  link_ <- renderFullRouteFEE @api @frontendRoute @cfg redirectToRoute
+  cfgVal <- ER.ask @cfg
 
   pure $ do
-    addUserTypeCookieHeader domainOpts userTypeCookieName userType'
-    addAuthCookieHeader csk domainOpts authCookieName accountID'
+    flip runReaderT cfgVal $ addUserTypeCookieHeader userTypeCookieName userType'
+    flip runReaderT cfgVal $ addAuthCookieHeader authCookieName accountID'
     -- Debug: inspect response headers before redirect
     resp <- Snap.getResponse
     let headers_ = Snap.listHeaders resp
     liftIO $ putStrLn $ "Response headers before redirect: " <> show headers_
-    frontendRedirect link_
+    Snap.redirect $ T.encodeUtf8 (getLink link_)
 
 -- TODO: they dont need to reset password if they have signed up with github
 -- | TODO: not actually in use, should actually work no problem with github
 oauthHandler
-  :: forall api db cfg es frontendRoute.
+  :: forall (api :: Type -> Type) db cfg es frontendRoute.
      ( IOE :> es
      , Database Postgres db
+     , HasConfig cfg (Jenga.Backend.Utils.HasConfig.FullRouteEncoder api frontendRoute)
      , HasRoute api (R frontendRoute)
      , Reader cfg :> es, HasConfig cfg (Pool Connection)
      , Reader cfg :> es, HasConfig cfg BaseURL
@@ -215,13 +228,15 @@ oauthHandler
   -> RedirectUri                  -- ^ Fully-rendered redirect URI to hand back to the OAuth provider
   -> R frontendRoute
   -> R frontendRoute
-  -> Eff es (Maybe (Id Account, T.Text), Snap ())
+  -> Eff es (Either OAuthError (Maybe (Id Account, T.Text), Snap ()))
 oauthHandler proxy oauthRoute redirectUri redirectToRoute redirectNoAuth = case oauthRoute of
   OAuth_RedirectUri :/ redirectParams -> case redirectParams of
-    Nothing -> liftIO $ error "Expected to receive the authorization code here"
+    Nothing ->
+      pure $ Left $ OAuthProviderError
+        "github: authorization callback did not include an authorization code"
     Just (RedirectUriParams code _mstate) -> do
-      clientId <- getGithubOAuthClientID <$> asksM @GithubOAuthClientID @cfg
-      clientSecret <- getGithubOAuthClientSecret <$> asksM @GithubOAuthClientSecret @cfg
+      clientId <- getGithubOAuthClientID <$> ER.asks (fromCfg :: cfg -> GithubOAuthClientID)
+      clientSecret <- getGithubOAuthClientSecret <$> ER.asks (fromCfg :: cfg -> GithubOAuthClientSecret)
       let oAuthUrl = "https://github.com/login/oauth/access_token"
       tlsMgr <- liftIO $ Http.newManager tlsManagerSettings
 
@@ -233,8 +248,8 @@ oauthHandler proxy oauthRoute redirectUri redirectToRoute redirectNoAuth = case 
       let accessToken = fmap access_token . Aeson.decode . Http.responseBody $ rsp
       case accessToken of
         Nothing -> do
-          noAuthLink <- renderFullRouteFE @api @(R frontendRoute) @cfg @es proxy redirectNoAuth
-          pure (Nothing, frontendRedirect noAuthLink)
+          noAuthLink <- renderFullRouteFEE @api @frontendRoute @cfg redirectNoAuth
+          pure $ Right (Nothing, Snap.redirect (T.encodeUtf8 (getLink noAuthLink)))
         Just aToken -> do
           reqUser <- liftIO $ Http.parseRequest "https://api.github.com/user"
           let reqUser' = reqUser { Http.requestHeaders = Http.requestHeaders reqUser <>
@@ -245,7 +260,9 @@ oauthHandler proxy oauthRoute redirectUri redirectToRoute redirectNoAuth = case 
           res <- liftIO $ flip Http.httpLbs tlsMgr reqUser'
           let userGithub :: Maybe GitHubUser = Aeson.decode . Http.responseBody $ res
           case userGithub of
-            Nothing -> error "this is likely a bug or you do not have a github account"
+            Nothing ->
+              pure $ Left $ OAuthDecodeError
+                "github /user: could not decode GitHubUser (possibly no linked github account)"
             Just userGH -> do
               ghEmail <- case _githubUser_github_email userGH of
                 Just email -> pure email
@@ -267,24 +284,29 @@ oauthHandler proxy oauthRoute redirectUri redirectToRoute redirectNoAuth = case 
                     Nothing -> pure $ _githubUser_login userGH
 
               (ghTbl :: PgTable Postgres db GithubID) <- asksTableM
-              maybeGitID <- withDbEnv @cfg $ getGithubUserIfTheyExist ghTbl userGH
+              maybeGitID <- withDbEnvE @cfg $ getGithubUserIfTheyExist ghTbl userGH
 
               liftIO $ putStrLn ghEmail
               let ghDisplayName = T.pack $ fromMaybe (_githubUser_login userGH) (_githubUser_name userGH)
-              (acctId, snapAction) <- handleOAuthLogin @api @db @cfg
+              -- handleOAuthLogin now bubbles OAuthError; forward Left, wrap Right.
+              eLogin <- handleOAuthLogin @api @db @cfg
                 proxy
                 ghEmail
                 maybeGitID
                 (\(GithubID _ghid uid) -> uid)
-                (\aid -> withDbEnv @cfg $ insertNewGithubID ghTbl userGH aid)
+                (\aid -> withDbEnvE @cfg $ insertNewGithubID ghTbl userGH aid)
                 redirectToRoute
-              pure (Just (acctId, ghDisplayName), snapAction)
+              case eLogin of
+                Left err -> pure $ Left err
+                Right (acctId, snapAction) ->
+                  pure $ Right (Just (acctId, ghDisplayName), snapAction)
 
 -- | Google OAuth handler
 googleOAuthHandler
-  :: forall api db cfg es frontendRoute.
+  :: forall (api :: Type -> Type) db cfg es frontendRoute.
      ( IOE :> es
      , Database Postgres db
+     , HasConfig cfg (Jenga.Backend.Utils.HasConfig.FullRouteEncoder api frontendRoute)
      , HasRoute api (R frontendRoute)
      , Reader cfg :> es, HasConfig cfg (Pool Connection)
      , Reader cfg :> es, HasConfig cfg BaseURL
@@ -303,13 +325,15 @@ googleOAuthHandler
   -> RedirectUri                  -- ^ Fully-rendered redirect URI to hand back to the OAuth provider
   -> R frontendRoute
   -> R frontendRoute
-  -> Eff es (Maybe (Id Account, T.Text), Snap ())
+  -> Eff es (Either OAuthError (Maybe (Id Account, T.Text), Snap ()))
 googleOAuthHandler proxy oauthRoute redirectUri redirectToRoute redirectNoAuth = case oauthRoute of
   OAuth_RedirectUri :/ redirectParams -> case redirectParams of
-    Nothing -> liftIO $ error "Expected to receive the authorization code here"
+    Nothing ->
+      pure $ Left $ OAuthProviderError
+        "google: authorization callback did not include an authorization code"
     Just (RedirectUriParams code _mstate) -> do
-      clientId <- getGoogleOAuthClientID <$> asksM @GoogleOAuthClientID @cfg
-      clientSecret <- getGoogleOAuthClientSecret <$> asksM @GoogleOAuthClientSecret @cfg
+      clientId <- getGoogleOAuthClientID <$> ER.asks (fromCfg :: cfg -> GoogleOAuthClientID)
+      clientSecret <- getGoogleOAuthClientSecret <$> ER.asks (fromCfg :: cfg -> GoogleOAuthClientSecret)
       let oAuthUrl = "https://oauth2.googleapis.com/token"
       tlsMgr <- liftIO $ Http.newManager tlsManagerSettings
 
@@ -321,8 +345,8 @@ googleOAuthHandler proxy oauthRoute redirectUri redirectToRoute redirectNoAuth =
       let accessToken = fmap access_token . Aeson.decode . Http.responseBody $ rsp
       case accessToken of
         Nothing -> do
-          noAuthLink <- renderFullRouteFE @api @(R frontendRoute) @cfg @es proxy redirectNoAuth
-          pure (Nothing, frontendRedirect noAuthLink)
+          noAuthLink <- renderFullRouteFEE @api @frontendRoute @cfg redirectNoAuth
+          pure $ Right (Nothing, Snap.redirect (T.encodeUtf8 (getLink noAuthLink)))
         Just aToken -> do
           reqUser <- liftIO $ Http.parseRequest "https://www.googleapis.com/oauth2/v2/userinfo"
           let reqUser' = reqUser { Http.requestHeaders = Http.requestHeaders reqUser <>
@@ -332,27 +356,33 @@ googleOAuthHandler proxy oauthRoute redirectUri redirectToRoute redirectNoAuth =
           res <- liftIO $ flip Http.httpLbs tlsMgr reqUser'
           let userGoogle :: Maybe GoogleUser = Aeson.decode . Http.responseBody $ res
           case userGoogle of
-            Nothing -> error "Failed to get Google user info"
+            Nothing ->
+              pure $ Left $ OAuthDecodeError
+                "google /oauth2/v2/userinfo: could not decode GoogleUser"
             Just userG -> do
               (googleTbl :: PgTable Postgres db GoogleID) <- asksTableM
-              maybeGoogleID <- withDbEnv @cfg $ getGoogleUserIfTheyExist googleTbl userG
+              maybeGoogleID <- withDbEnvE @cfg $ getGoogleUserIfTheyExist googleTbl userG
 
               let googleEmail = _googleUser_email userG
                   googleDisplayName = T.pack $ fromMaybe (takeWhile (/= '@') googleEmail) (_googleUser_name userG)
-              (acctId, snapAction) <- handleOAuthLogin @api @db @cfg
+              eLogin <- handleOAuthLogin @api @db @cfg
                 proxy
                 googleEmail
                 maybeGoogleID
                 (\(GoogleID _gid uid) -> uid)
-                (\aid -> withDbEnv @cfg $ insertNewGoogleID googleTbl userG aid)
+                (\aid -> withDbEnvE @cfg $ insertNewGoogleID googleTbl userG aid)
                 redirectToRoute
-              pure (Just (acctId, googleDisplayName), snapAction)
+              case eLogin of
+                Left err -> pure $ Left err
+                Right (acctId, snapAction) ->
+                  pure $ Right (Just (acctId, googleDisplayName), snapAction)
 
 -- | Discord OAuth handler
 discordOAuthHandler
-  :: forall api db cfg es frontendRoute.
+  :: forall (api :: Type -> Type) db cfg es frontendRoute.
      ( IOE :> es
      , Database Postgres db
+     , HasConfig cfg (Jenga.Backend.Utils.HasConfig.FullRouteEncoder api frontendRoute)
      , HasRoute api (R frontendRoute)
      , Reader cfg :> es, HasConfig cfg (Pool Connection)
      , Reader cfg :> es, HasConfig cfg BaseURL
@@ -371,13 +401,15 @@ discordOAuthHandler
   -> RedirectUri                  -- ^ Fully-rendered redirect URI to hand back to the OAuth provider
   -> R frontendRoute
   -> R frontendRoute
-  -> Eff es (Maybe (Id Account, T.Text), Snap ())
+  -> Eff es (Either OAuthError (Maybe (Id Account, T.Text), Snap ()))
 discordOAuthHandler proxy oauthRoute redirectUri redirectToRoute redirectNoAuth = case oauthRoute of
   OAuth_RedirectUri :/ redirectParams -> case redirectParams of
-    Nothing -> liftIO $ error "Expected to receive the authorization code here"
+    Nothing ->
+      pure $ Left $ OAuthProviderError
+        "discord: authorization callback did not include an authorization code"
     Just (RedirectUriParams code _mstate) -> do
-      clientId <- getDiscordOAuthClientID <$> asksM @DiscordOAuthClientID @cfg
-      clientSecret <- getDiscordOAuthClientSecret <$> asksM @DiscordOAuthClientSecret @cfg
+      clientId <- getDiscordOAuthClientID <$> ER.asks (fromCfg :: cfg -> DiscordOAuthClientID)
+      clientSecret <- getDiscordOAuthClientSecret <$> ER.asks (fromCfg :: cfg -> DiscordOAuthClientSecret)
       let oAuthUrl = "https://discord.com/api/oauth2/token"
       tlsMgr <- liftIO $ Http.newManager tlsManagerSettings
 
@@ -389,8 +421,8 @@ discordOAuthHandler proxy oauthRoute redirectUri redirectToRoute redirectNoAuth 
       let accessToken = fmap access_token . Aeson.decode . Http.responseBody $ rsp
       case accessToken of
         Nothing -> do
-          noAuthLink <- renderFullRouteFE @api @(R frontendRoute) @cfg @es proxy redirectNoAuth
-          pure (Nothing, frontendRedirect noAuthLink)
+          noAuthLink <- renderFullRouteFEE @api @frontendRoute @cfg redirectNoAuth
+          pure $ Right (Nothing, Snap.redirect (T.encodeUtf8 (getLink noAuthLink)))
         Just aToken -> do
           reqUser <- liftIO $ Http.parseRequest "https://discord.com/api/users/@me"
           let reqUser' = reqUser { Http.requestHeaders = Http.requestHeaders reqUser <>
@@ -400,18 +432,23 @@ discordOAuthHandler proxy oauthRoute redirectUri redirectToRoute redirectNoAuth 
           res <- liftIO $ flip Http.httpLbs tlsMgr reqUser'
           let userDiscord :: Maybe DiscordUser = Aeson.decode . Http.responseBody $ res
           case userDiscord of
-            Nothing -> error "Failed to get Discord user info"
+            Nothing ->
+              pure $ Left $ OAuthDecodeError
+                "discord /users/@me: could not decode DiscordUser"
             Just userD -> do
               (discordTbl :: PgTable Postgres db DiscordID) <- asksTableM
-              maybeDiscordID <- withDbEnv @cfg $ getDiscordUserIfTheyExist discordTbl userD
+              maybeDiscordID <- withDbEnvE @cfg $ getDiscordUserIfTheyExist discordTbl userD
 
               let discordEmail = fromMaybe (_discordUser_username userD) $ _discordUser_email userD
                   discordDisplayName = T.pack $ _discordUser_username userD
-              (acctId, snapAction) <- handleOAuthLogin @api @db @cfg
+              eLogin <- handleOAuthLogin @api @db @cfg
                 proxy
                 discordEmail
                 maybeDiscordID
                 (\(DiscordID _did uid) -> uid)
-                (\aid -> withDbEnv @cfg $ insertNewDiscordID discordTbl userD aid)
+                (\aid -> withDbEnvE @cfg $ insertNewDiscordID discordTbl userD aid)
                 redirectToRoute
-              pure (Just (acctId, discordDisplayName), snapAction)
+              case eLogin of
+                Left err -> pure $ Left err
+                Right (acctId, snapAction) ->
+                  pure $ Right (Just (acctId, discordDisplayName), snapAction)

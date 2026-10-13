@@ -1,6 +1,5 @@
 module Classh.TextPosition
   ( module X
-  -- TODO
   , TextPosition(..)
   , tp_track 
   , tp_clamp

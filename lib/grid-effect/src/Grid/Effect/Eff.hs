@@ -50,14 +50,11 @@ module Grid.Effect.Eff
   ) where
 
 import Prelude hiding ((>>=), (>>), return)
-import qualified Prelude
 
 import Effectful (Eff)
 import Grid.Effect.Rational
 import Grid.Effect.Indexed (GridI(..))
 import qualified Grid.Effect.Indexed as Ix
-
-import GHC.TypeLits (Nat)
 
 -- | @GridI@ over @Eff es@.
 --
