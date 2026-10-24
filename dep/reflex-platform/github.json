@@ -1,8 +1,8 @@
 {
-  "owner": "Ace-Interview-Prep",
+  "owner": "TypifyDev",
   "repo": "reflex-platform",
-  "branch": "gs/optimize-android-builds",
+  "branch": "gs/ghcjs810-getdeps-strict",
   "private": false,
-  "rev": "ec391db332f6533dae6fa9c209891c5880ad7743",
-  "sha256": "1rim6qvnlwq4k34lbk3w73zfghfdlzh7jwh5lylsk4rr16yz2af2"
+  "rev": "5c27ca1722b1ee9d14e6ea1d7ff9c793fee6315a",
+  "sha256": "0v41i1ygnzci9zggrzaskml31l13hzzn9zpni883vmky7qk4z52g"
 }
