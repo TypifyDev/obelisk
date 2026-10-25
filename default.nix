@@ -331,7 +331,18 @@ in rec {
                   ${self.backendName} = nullIfAbsent (self.base + "/backend");
                 };
                 shellPackages = {};
-                combinedPackages = self.predefinedPackages // self.userSettings.packages // self.shellPackages;
+                # shellPackages values arrive as STRINGS when `ob run` serializes
+                # local source paths through JSON (`--argstr pkgs '{"common":"/home/.../common",...}'`
+                # from Obelisk.Command.Project -> `builtins.fromJSON pkgs`). A string
+                # used as a derivation `src` does NOT auto-import into the nix store,
+                # so the sandbox can't find it and `unpackPhase` fails with
+                #   "do not know how to unpack source archive /home/.../common"
+                # Convert absolute-string values to nix paths at merge time so
+                # callCabal2nix downstream sees paths and nix auto-stores them.
+                combinedPackages = self.predefinedPackages // self.userSettings.packages
+                  // (builtins.mapAttrs
+                        (_: v: if builtins.isString v then (/. + v) else v)
+                        self.shellPackages);
                 projectOverrides = self': super': ({
                   ${self.backendName} = haskellLib.addBuildDepend super'.${self.backendName} self'.obelisk-run;
                 } // (
