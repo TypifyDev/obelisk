@@ -13,9 +13,7 @@
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeOperators #-}
 
--- | Effectful-only surface of the legacy 'Jenga.Frontend' module,
--- plus the 'Frontend' / 'FrontendMode' / 'renderFrontendHtml' surface
--- absorbed from the former @jenga-route-servant@ package.
+-- | Effectful and MTL frontends sharing Jenga's static and browser hosts.
 module Jenga.Frontend
   ( -- * Frontend type
     Frontend(..)
@@ -52,6 +50,8 @@ import           Data.Kind                               (Constraint, Type)
 import           Data.Map                                (Map)
 import qualified Data.Map                                as Map
 import           Data.Maybe                              (catMaybes)
+import           Data.Monoid                             (appEndo)
+import           Foreign.JavaScript.TH                   (JSContextSingleton (..))
 import qualified Data.Proxy                              as P
 import           Data.Text                               (Text)
 import qualified Data.Text                               as T
@@ -92,6 +92,8 @@ import           Reflex.Effectful.DomHost
   )
 
 import           Jenga.Frontend.Cookie
+import           Jenga.Frontend.MTL
+import qualified Jenga.Frontend.Effectful.Configs as ConfigE
 import           Jenga.Frontend.Effectful.Configs        (Configs, runConfigs)
 import           Jenga.Route.Effect
   ( Routed(..)
@@ -145,6 +147,31 @@ data Frontend r = Frontend
   , _frontend_body :: !(forall (es :: [Effect]) (t :: Type).
       FrontendWidget es t r => Eff es ())
   }
+  | FrontendMTL (FrontendMTLWidget r) (FrontendMTLWidget r)
+
+data FrontendPart = FrontendHead | FrontendBody
+
+renderFrontendPart
+  :: (FrontendWidget es t r, FrontendBaseMTL t m)
+  => (forall a. Eff es a -> m a) -> FrontendPart -> Frontend r -> m ()
+renderFrontendPart liftEffects part frontend = case frontend of
+  Frontend headWidget bodyWidget -> liftEffects $ case part of
+    FrontendHead -> headWidget
+    FrontendBody -> bodyWidget
+  FrontendMTL headWidget bodyWidget -> case part of
+    FrontendHead -> renderMTLPart liftEffects headWidget
+    FrontendBody -> renderMTLPart liftEffects bodyWidget
+
+renderMTLPart
+  :: (FrontendWidget es t r, FrontendBaseMTL t m)
+  => (forall a. Eff es a -> m a) -> FrontendMTLWidget r -> m ()
+renderMTLPart liftEffects widget = do
+  configs <- liftEffects ConfigE.getConfigs
+  cookies <- liftEffects askCookies
+  route <- liftEffects Routing.askRoute
+  encode <- liftEffects Routing.askRouteToUrl
+  ((), changes) <- runFrontendMTLWidget configs cookies route encode widget
+  liftEffects $ Routing.modifyRoute $ appEndo <$> changes
 
 -- | Controls how the frontend renders.
 data FrontendMode = FrontendMode
@@ -198,10 +225,10 @@ renderFrontendHtml configs cookies urlEnc route frontend headExtra bodyExtra = d
                 el "head" $ do
                   baseTag
                   injectExecutableConfigs configs
-                  _frontend_head frontend @_ @DH.StaticDomTimeline
+                  renderFrontendPart id FrontendHead frontend
                   headExtra @_ @DH.StaticDomTimeline
                 el "body" $ do
-                  _frontend_body frontend @_ @DH.StaticDomTimeline
+                  renderFrontendPart id FrontendBody frontend
                   bodyExtra @_ @DH.StaticDomTimeline
   pure $ "<!DOCTYPE html>" <> html
 
@@ -401,7 +428,7 @@ getLocationUriAuthJSM location = do
 -- 'FrontendMode' from the current platform (GHCJS = hydrate + no hash;
 -- JSaddle-warp = immediate + hash).
 runFrontend
-  :: forall (api :: Type) r.
+  :: forall api r.
      ( Servant.HasRoute api r
      )
   => P.Proxy api
@@ -433,7 +460,7 @@ runFrontend proxy fallback frontend = do
 -- tags. On hash-route mode, 'setInitialRoute' rewrites the current URL
 -- into a hash-fragment shape before the router reads it.
 runFrontendWithConfigsAndCurrentRoute
-  :: forall (api :: Type) r.
+  :: forall api r.
      ( Servant.HasRoute api r
      )
   => FrontendMode
@@ -442,14 +469,24 @@ runFrontendWithConfigsAndCurrentRoute
   -> r
   -> Frontend r
   -> IO ()
-runFrontendWithConfigsAndCurrentRoute mode configs proxy fallback frontend =
-  DH.mainWidget $ do
+runFrontendWithConfigsAndCurrentRoute mode configs _proxy fallback frontend =
+  DH.mainWidgetWithHead (renderPart FrontendHead) (renderPart FrontendBody)
+  where
+   renderPart :: forall x es. FrontendPart -> DH.ImmediateWidget x es
+   renderPart part = do
     when (_frontendMode_hydrate mode) (DH.liftEff removeHTMLConfigs)
     when (_frontendMode_adjustRoute mode) $
       DH.liftEff (setInitialRoute (_frontendMode_adjustRoute mode))
     cookies <- DH.liftEff readCookiesFromDocument
     DH.liftEff $ runCookies cookies $ runConfigs configs $
-      Routing.runBrowserRouting @api @_ @DH.DomTimeline proxy fallback $ do
-        baseTag
-        _frontend_head frontend
-        _frontend_body frontend
+      Routing.runBrowserRoutingWith @r @DH.DomTimeline
+        (Servant.encodeRoute @api)
+        (\url -> let (segments, query) = Servant.urlToSegments url
+                 in Servant.decodeRoute @api segments query)
+        fallback $ do
+        case part of
+          FrontendHead -> baseTag
+          FrontendBody -> pure ()
+        context <- DH.liftJSM JSaddle.askJSM
+        DH.runWidgetEff (renderFrontendPart DH.liftEff part frontend)
+          (JSContextSingleton context)

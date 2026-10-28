@@ -11,7 +11,7 @@ import Jenga.Common.HasJengaConfig
 import Effectful.Reader.Static (Reader)
 import Jenga.Common.Errors
 import Jenga.Route.Servant (HasRoute (..))
-import Jenga.Route (R, renderObeliskBackendRoute)
+import Jenga.Route (R, FullRouteEncoder, renderObeliskBackendRoute)
 import Reflex.Class (Reflex, Event, current, gate, leftmost, never, fanEither)
 import Reflex.Dynamic (switchDyn)
 import Reflex.Dom.Core (XhrRequest, XhrResponse, postJson

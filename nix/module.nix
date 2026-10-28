@@ -28,10 +28,11 @@ let jengaLib = import ./lib.nix { inherit system; };
 
     # Hash and copy static files into a flat directory with cache-busting names.
     hashedStatic = if rawStatic != null
-      then pkgs.runCommand "hashed-static" {
+      then pkgs.runCommand "hashed-static" ({
         LANG = "en_US.UTF-8";
+      } // lib.optionalAttrs pkgs.stdenv.hostPlatform.isGnu {
         LOCALE_ARCHIVE = "${pkgs.glibcLocales}/lib/locale/locale-archive";
-      } ''
+      }) ''
         ${jengaLib.jenga-asset-manifest-generate} --module-only ${rawStatic} "$TMPDIR" Jenga.Generated.Static $out
       ''
       else null;

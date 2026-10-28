@@ -29,77 +29,12 @@ flag profile-reflex
   default: False
   manual: True
 
--- |
--- reflex-dom-core-effectful ports reflex-dom-core (DomBuilder + widget layer)
--- to an Effectful-native shape, sitting on top of reflex's FRP
--- engine. No dependency on reflex-dom-core at runtime; only ghcjs-dom /
--- jsaddle for browser interop.
---
--- Ported module layout mirrors upstream:
---   Reflex.Effectful.Dom.Class
---   Reflex.Effectful.Dom.Builder.Class
---   Reflex.Effectful.Dom.Builder.Immediate
---   Reflex.Effectful.Dom.Builder.Static
---   Reflex.Effectful.Dom.Builder.Hydratable
---   Reflex.Effectful.Dom.Prerender
---   Reflex.Effectful.Dom.Widget.*
---   Reflex.Effectful.Dom.Main
---   Reflex.Effectful.Dom.Xhr
---   Reflex.Effectful.Dom.WebSocket
---   Reflex.Effectful.Dom.Foreign.JavaScript.TH  (and Orphans, Utils)
 
+-- Effectful DOM host with MTL class instances and widget re-exports.
 library
   exposed-modules:
-    -- === NEW MODULE for this wave ===
     Reflex.Effectful.DomHost
-    Reflex.Effectful.DomHostInterpose
 
-    -- === Variant A modules — kept commented out ===
-    -- These sit against the deleted `reflex` shim and don't
-    -- build. Kept in-tree as read-only reference for the DomHost.hs
-    -- port. Re-expose as follow-up waves land their content into
-    -- DomHost.hs (or a companion module) with eff-reflex-native
-    -- imports. Do NOT re-enable until the underlying file is verified
-    -- to build against eff-reflex.
-    -- Reflex.Effectful.Dom
-    -- Reflex.Effectful.Dom.Builder.Class
-    -- Reflex.Effectful.Dom.Builder.Class.Events
-    -- Reflex.Effectful.Dom.Builder.Class.TH
-    -- Reflex.Effectful.Dom.Builder.Immediate
-    -- Reflex.Effectful.Dom.Builder.Immediate.Element
-    -- Reflex.Effectful.Dom.Builder.Immediate.EventHandlers
-    -- Reflex.Effectful.Dom.Builder.Immediate.Hydration
-    -- Reflex.Effectful.Dom.Builder.Immediate.Instances
-    -- Reflex.Effectful.Dom.Builder.Immediate.RenderHook
-    -- Reflex.Effectful.Dom.Builder.Immediate.Space
-    -- Reflex.Effectful.Dom.Builder.Immediate.Types
-    -- Reflex.Effectful.Dom.Builder.Immediate.Wrap
-    -- Reflex.Effectful.Dom.Builder.Static
-    -- Reflex.Effectful.Dom.Builder.Hydratable
-    -- Reflex.Effectful.Dom.Builder.InputDisabled
-    -- Reflex.Effectful.Dom.Class
-    -- Reflex.Effectful.Dom.Foreign.JavaScript.TH
-    -- Reflex.Effectful.Dom.Foreign.JavaScript.Utils
-    -- Reflex.Effectful.Dom.Location
-    -- Reflex.Effectful.Dom.Main
-    -- Reflex.Effectful.Dom.Modals.Class
-    -- Reflex.Effectful.Dom.Old
-    -- Reflex.Effectful.Dom.Prerender
-    -- Reflex.Effectful.Dom.Storage
-    -- Reflex.Effectful.Dom.Time
-    -- Reflex.Effectful.Dom.WebSocket
-    -- Reflex.Effectful.Dom.WebSocket.Foreign
-    -- Reflex.Effectful.Dom.WebSocket.Query
-    -- Reflex.Effectful.Dom.Widget
-    -- Reflex.Effectful.Dom.Widget.Basic
-    -- Reflex.Effectful.Dom.Widget.Input
-    -- Reflex.Effectful.Dom.Widget.Lazy
-    -- Reflex.Effectful.Dom.Widget.Resize
-    -- Reflex.Effectful.Dom.Xhr
-    -- Reflex.Effectful.Dom.Xhr.Exception
-    -- Reflex.Effectful.Dom.Xhr.Foreign
-    -- Reflex.Effectful.Dom.Xhr.FormData
-    -- Reflex.Effectful.Dom.Xhr.ResponseType
 
   -- MTL modules re-exported from Hackage 'reflex-dom-core' so downstream
   -- consumers using @DomBuilder t m@-style constraints (i.e. code ported
@@ -231,6 +166,8 @@ test-suite dom-host-smoke-ae
 -- *AE variants. Build errors surface which AE-composer functions
 -- still need to be written (Phase 5-9).
 test-suite dom-host-hydration-browser-ae
+  if os(linux)
+    build-depends: linux-namespaces
   type:               exitcode-stdio-1.0
   main-is:            HydrationBrowserAE.hs
   other-modules:      Test.Util.ChromeFlags
@@ -257,7 +194,6 @@ test-suite dom-host-hydration-browser-ae
     , jsaddle
     , jsaddle-warp
     , lens
-    , linux-namespaces
     , mtl
     , network
     , unix
@@ -273,7 +209,7 @@ test-suite dom-host-hydration-browser-ae
     , text
     , wai
     , warp
-    , webdriver
+    , webdriver == 0.12.0.1
     , websockets
     , which
   default-language:   GHC2024
@@ -282,7 +218,7 @@ test-suite dom-host-hydration-browser-ae
     ScopedTypeVariables
     TemplateHaskell
     TypeApplications
-  ghc-options:        -Wall -Wno-orphans -Wno-unused-imports
+  ghc-options:        -threaded -Wall -Wno-orphans -Wno-unused-imports
 
 test-suite dom-host-static-render-smoke
   type:               exitcode-stdio-1.0
@@ -335,6 +271,8 @@ test-suite dom-host-hydration-roundtrip-smoke
 -- Requires headless chromium + selenium on PATH at runtime; the build
 -- itself only needs the Haskell deps below.
 test-suite dom-host-hydration-browser
+  if os(linux)
+    build-depends: linux-namespaces
   type:               exitcode-stdio-1.0
   main-is:            HydrationBrowser.hs
   other-modules:      Test.Util.ChromeFlags
@@ -361,7 +299,6 @@ test-suite dom-host-hydration-browser
     , jsaddle
     , jsaddle-warp
     , lens
-    , linux-namespaces
     , mtl
     , network
     , unix
@@ -377,7 +314,7 @@ test-suite dom-host-hydration-browser
     , text
     , wai
     , warp
-    , webdriver
+    , webdriver == 0.12.0.1
     , websockets
     , which
   default-language:   GHC2024
@@ -386,9 +323,11 @@ test-suite dom-host-hydration-browser
     ScopedTypeVariables
     TemplateHaskell
     TypeApplications
-  ghc-options:        -Wall -Wno-orphans -Wno-unused-imports
+  ghc-options:        -threaded -Wall -Wno-orphans -Wno-unused-imports
 
 test-suite dom-host-hydration-browser-ours
+  if os(linux)
+    build-depends: linux-namespaces
   type:               exitcode-stdio-1.0
   main-is:            HydrationBrowserOurs.hs
   other-modules:      Test.Util.ChromeFlags
@@ -415,7 +354,6 @@ test-suite dom-host-hydration-browser-ours
     , jsaddle
     , jsaddle-warp
     , lens
-    , linux-namespaces
     , mtl
     , network
     , unix
@@ -431,7 +369,7 @@ test-suite dom-host-hydration-browser-ours
     , text
     , wai
     , warp
-    , webdriver
+    , webdriver == 0.12.0.1
     , websockets
     , which
   default-language:   GHC2024
@@ -440,7 +378,7 @@ test-suite dom-host-hydration-browser-ours
     ScopedTypeVariables
     TemplateHaskell
     TypeApplications
-  ghc-options:        -Wall -Wno-orphans -Wno-unused-imports
+  ghc-options:        -threaded -Wall -Wno-orphans -Wno-unused-imports
 
 test-suite dom-host-widget-input-smoke
   type:               exitcode-stdio-1.0

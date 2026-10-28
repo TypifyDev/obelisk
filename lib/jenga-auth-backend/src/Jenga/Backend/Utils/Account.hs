@@ -28,7 +28,7 @@ import Jenga.Common.Auth
 import Rhyolite.Account
 import Rhyolite.Backend.Account
 import Jenga.Route.Core (R)
-import Jenga.Route (pattern (:/))
+import Jenga.Route (pattern (:/), FullRouteEncoder)
 import Database.Beam.Postgres
 import Database.Beam
 import Network.Mail.Mime

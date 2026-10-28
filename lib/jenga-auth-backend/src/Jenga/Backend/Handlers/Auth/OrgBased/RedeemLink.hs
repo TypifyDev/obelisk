@@ -41,7 +41,7 @@ redeemLinkHandler
      , HasRoute api (R frontendRoute)
      , HasJengaTable Postgres db InviteLink
      , HasJengaTable Postgres db CompanyInfo
-     , HasConfig cfg (Jenga.Backend.Utils.HasConfig.FullRouteEncoder api frontendRoute)
+     , HasConfig cfg (FullRouteEncoder api frontendRoute)
      , HasJengaTable Postgres db Account
      , HasJengaTable Postgres db UserTypeTable
      , HasJengaTable Postgres db OrgOwnedUsers

@@ -28,7 +28,7 @@ frontendRedirect
   :: forall beR cfg m frontendRoute.
      ( MonadSnap m
      , HasConfig cfg BaseURL
-     , HasConfig cfg (Jenga.Backend.Utils.HasConfig.FullRouteEncoder beR frontendRoute)
+     , HasConfig cfg (FullRouteEncoder beR frontendRoute)
      )
   => R frontendRoute
   -> ReaderT cfg m ()

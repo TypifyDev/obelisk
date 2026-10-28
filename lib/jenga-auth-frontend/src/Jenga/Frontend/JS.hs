@@ -7,6 +7,7 @@ import Jenga.Common.HasJengaConfig
 import Jenga.Route.Servant (HasRoute (..))
 import Reflex (Reflex, Event, Dynamic, never)
 import qualified Reflex
+import qualified Reflex.Dom.Core as RDC
 import Reflex.Dom.Core (postJson, newXMLHttpRequestWithError
                        , XhrException, _xhrResponse_responseText)
 import Language.Javascript.JSaddle hiding (liftJSM)
@@ -59,6 +60,12 @@ runJSWhen event jsFunc = do
   d <- prerender @t @space (pure never) $ performEventH $ (liftJSM . jsFunc) <$> event
   -- prerender returned Dynamic t (Event t b); collapse with Reflex's switchDyn.
   pure (Reflex.switchDyn d)
+
+-- MTL counterpart of runJSWhen; browser effects only run in the client.
+runJSWhenMTL :: (Reflex t, RDC.Prerender t m, Applicative m)
+             => Event t a -> (a -> JSM b) -> m (Event t b)
+runJSWhenMTL event jsFunc = fmap Reflex.switchDyn $
+  RDC.prerender (pure never) $ RDC.performEvent $ (JS.liftJSM . jsFunc) <$> event
 
 runJSWhenPb :: forall t space es b. ( HasPrerender t space es, PostBuild t :> es, PerformEventH t :> es
                , PerformEventH t :> ClientEs t space es
@@ -146,47 +153,6 @@ addHTMLEventListener htmlRef htmlEventType actn = do
     )
   pure event
 
-{- PARKED — MTL twins reverted from this shared lib (sandbox denied edits in deps/jenga);
-   call sites in frontend-feedback define these locally instead.
-addHTMLEventListener'
-  :: ( Reflex t
-     , RDC.TriggerEvent t m
-     , MonadJSM m
-     )
-  => Element er GhcjsDomSpace t
-  -> HTMLEventType
-  -> (HTMLEvent -> JSM a)
-  -> m (Event t a)
-addHTMLEventListener' elementReflex htmlEventType actn = do
-  (event, trigger) <- RDC.newTriggerEvent
-  let raw = GHCJS.unElement . _element_raw $ elementReflex
-  JS.liftJSM $ void $ raw ^. js2 ("addEventListener" :: JSString) htmlEventType
-    (fun $ \_ _ e -> case e of
-        [] -> pure ()
-        (x:_) -> do
-          out <- actn x
-          liftIO $ trigger out
-    )
-  pure event
-
--- | MTL twin of 'runJSWhen'. Shadowed name clash with the Eff version is
--- avoided via the prime; call-sites in MTL (Reflex-Dom) context use this
--- form, Eff call-sites keep using 'runJSWhen'.
-runJSWhen'
-  :: forall t m a b.
-     ( Reflex t
-     , RDC.Prerender t m
-     , Applicative m
-     , RDC.PerformEvent t (RDC.Client m)
-     , MonadJSM (RDC.Performable (RDC.Client m))
-     )
-  => Event t a
-  -> (a -> JSM b)
-  -> m (Event t b)
-runJSWhen' event jsFunc =
-  fmap Reflex.switchDyn $ RDC.prerender (pure never) $
-    RDC.performEvent $ fmap (JS.liftJSM . jsFunc) event
--}
 
 currentWindowUnchecked :: MonadJSM m => m JSVal
 currentWindowUnchecked = JS.liftJSM $ jsg ("window" :: JSString)

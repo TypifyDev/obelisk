@@ -22,6 +22,10 @@ library
                  effectful-core,
                  ghcjs-dom,
                  jenga-route,
+                 jenga-executable-config-lookup,
+                 reflex-dom-core,
+                 primitive,
+                 ref-tf,
                  jsaddle,
                  network-uri,
                  reflex,
@@ -29,9 +33,20 @@ library
                  text
   exposed-modules:
     Jenga.Frontend
+    Jenga.Frontend.MTL
     Jenga.Frontend.Cookie
     Jenga.Frontend.Effectful
     Jenga.Frontend.Effectful.Configs
     Jenga.Frontend.Effectful.Cookies
     Jenga.Frontend.Effectful.Route
   ghc-options: -Wall -Werror -Wredundant-constraints -Wincomplete-uni-patterns -Wincomplete-record-updates -O
+
+test-suite frontend-rendering
+  type: exitcode-stdio-1.0
+  main-is: FrontendRendering.hs
+  hs-source-dirs: test
+  default-language: GHC2024
+  ghc-options: -Wall -Werror -threaded
+  build-depends: base, bytestring, containers, text,
+                 jenga-frontend, jenga-route, jenga-executable-config-lookup,
+                 reflex-dom-core, reflex-dom-core-effectful

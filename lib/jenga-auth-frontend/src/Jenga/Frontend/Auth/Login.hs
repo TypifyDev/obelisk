@@ -12,7 +12,7 @@ import Jenga.Common.Errors
 import Jenga.Route.Servant (HasRoute)
 import qualified Jenga.Route.Frontend as RouteE (SetRoute, setRoute)
 import qualified Jenga.Route.FrontendMTL as RouteM (SetRoute, setRoute)
-import Jenga.Route (R)
+import Jenga.Route (R, FullRouteEncoder)
 import Reflex.Class (Reflex, Event, Dynamic, current, tag, leftmost)
 import qualified Reflex.Class as R
 import qualified Reflex.Dom.Core as RDC

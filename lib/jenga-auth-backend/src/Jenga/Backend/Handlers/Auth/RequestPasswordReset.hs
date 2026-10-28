@@ -47,7 +47,7 @@ requestPasswordResetHandler
      , Reader cfg :> es, HasConfig cfg AdminEmail
      , Reader cfg :> es, HasConfig cfg (Pool Connection)
      , HasRoute api (R frontendRoute)
-     , HasConfig cfg (Jenga.Backend.Utils.HasConfig.FullRouteEncoder api frontendRoute)
+     , HasConfig cfg (FullRouteEncoder api frontendRoute)
      , HasJengaTable Postgres db Account
      , HasJengaTable Postgres db SendEmailTask
      , HasJsonNotifyTbl Postgres SendEmailTask n

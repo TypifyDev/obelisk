@@ -6,6 +6,8 @@ import Jenga.Common.Auth
 import Jenga.Common.Errors
 import Jenga.Common.Stripe
 import Jenga.Route.Frontend (SetRoute, setRoute)
+import qualified Jenga.Route.FrontendMTL as RouteM
+import qualified Reflex.Dom.Core as RDC
 import Reflex.Class (Reflex, Event, Dynamic, current, tag, leftmost, ffor, fanEither, ffilter)
 
 import qualified Data.Text as T
@@ -40,7 +42,8 @@ data PaywallConfig t = PaywallConfig
   , _paywallConfig_errors :: Event t FrontendError
   }
 
-paywall_FRP
+-- | Effectful twin of 'paywall_FRP'; both share validation and event wiring.
+paywall_FRPE
   :: forall frontendR t es.
      ( PostBuild t :> es
      , Hold t :> es, Sample t :> es
@@ -60,8 +63,33 @@ paywall_FRP
   -> (Event t PaymentFormPrivate -> Eff es (Event t (Either (BackendError SubscribeError) Bool)))
   -> PaywallData t
   -> Eff es (PaywallConfig t)
-paywall_FRP loginRoute sendHasFreeTrialCode sendUpgradeToPaid (PaywallData _firstName _lastName cardNumber expiryMonth expiryYear cvc click) = do
-  pb <- getPostBuildE
+paywall_FRPE = paywallFRPWith getPostBuildE setRoute
+
+-- | MTL paywall logic. Request hooks preserve backend errors and responses.
+paywall_FRP
+  :: ( RDC.PostBuild t m, RDC.MonadHold t m, RDC.PerformEvent t m
+     , RDC.TriggerEvent t m, MonadIO (RDC.Performable m)
+     , RouteM.SetRoute t frontendR m
+     )
+  => frontendR
+  -> (Event t () -> m (Event t (Either (BackendError NoFreeTrialCode) (T.Text, Maybe T.Text))))
+  -> (Event t PaymentFormPrivate -> m (Event t (Either (BackendError SubscribeError) Bool)))
+  -> PaywallData t -> m (PaywallConfig t)
+paywall_FRP = paywallFRPWith RDC.getPostBuild RouteM.setRoute
+
+paywallFRPWith
+  :: forall t m frontendR.
+     ( RDC.MonadHold t m, RDC.PerformEvent t m, RDC.TriggerEvent t m
+     , MonadIO (RDC.Performable m)
+     )
+  => m (Event t ())
+  -> (Event t frontendR -> m ())
+  -> frontendR
+  -> (Event t () -> m (Event t (Either (BackendError NoFreeTrialCode) (T.Text, Maybe T.Text))))
+  -> (Event t PaymentFormPrivate -> m (Event t (Either (BackendError SubscribeError) Bool)))
+  -> PaywallData t -> m (PaywallConfig t)
+paywallFRPWith postBuild changeRoute loginRoute sendHasFreeTrialCode sendUpgradeToPaid (PaywallData _firstName _lastName cardNumber expiryMonth expiryYear cvc click) = do
+  pb <- postBuild
   codeResponse <- sendHasFreeTrialCode pb
   let (errFT, email_code :: Event t (T.Text, Maybe T.Text)) = fanEither codeResponse
 
@@ -89,8 +117,6 @@ paywall_FRP loginRoute sendHasFreeTrialCode sendUpgradeToPaid (PaywallData _firs
           Left _ -> Left "Invalid Expiry Year"
           Right year -> Right $ PaymentFormPrivate cardNumber' month year cvc' discountCode'
 
-  -- we should (maybe) sign this for security like the tokens (may be nicer to do as fields of payment form)
-  -- it may also be redundant since the key would need to be shared (i think)
   let (err, paymentFormGood) = fanEither $ validate <$> validEmailAndNumericals
   upgradeResponse <- sendUpgradeToPaid paymentFormGood
   let (errRes, good) = fanEither upgradeResponse
@@ -109,6 +135,6 @@ paywall_FRP loginRoute sendHasFreeTrialCode sendUpgradeToPaid (PaywallData _firs
       ]
   userMessage <- holdDyn "" $ leftmost [ showUser <$> errorEv, paymentFormGood', onGood ]
   redirect <- delay 2 (ffilter (== False) good)
-  setRoute $ loginRoute <$ (ffilter (== False) redirect)
+  changeRoute $ loginRoute <$ (ffilter (== False) redirect)
 
   pure $ PaywallConfig code userMessage errorEv

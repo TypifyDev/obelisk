@@ -95,7 +95,7 @@ handleOAuthLogin
      , Reader cfg :> es, HasConfig cfg CS.Key
      , Reader cfg :> es, HasConfig cfg (Pool Connection)
      , Reader cfg :> es, HasConfig cfg BaseURL
-     , HasConfig cfg (Jenga.Backend.Utils.HasConfig.FullRouteEncoder api frontendRoute)
+     , HasConfig cfg (FullRouteEncoder api frontendRoute)
      , HasRoute api (R frontendRoute)
      , HasJengaTable Postgres db Account
      , HasJengaTable Postgres db UserTypeTable
@@ -162,7 +162,7 @@ setCookiesAndRedirect
      , Reader cfg :> es, HasConfig cfg CS.Key
      , Reader cfg :> es, HasConfig cfg (Pool Connection)
      , Reader cfg :> es, HasConfig cfg BaseURL
-     , HasConfig cfg (Jenga.Backend.Utils.HasConfig.FullRouteEncoder api frontendRoute)
+     , HasConfig cfg (FullRouteEncoder api frontendRoute)
      , HasRoute api (R frontendRoute)
      , HasJengaTable Postgres db UserTypeTable
      )
@@ -209,7 +209,7 @@ oauthHandler
   :: forall (api :: Type -> Type) db cfg es frontendRoute.
      ( IOE :> es
      , Database Postgres db
-     , HasConfig cfg (Jenga.Backend.Utils.HasConfig.FullRouteEncoder api frontendRoute)
+     , HasConfig cfg (FullRouteEncoder api frontendRoute)
      , HasRoute api (R frontendRoute)
      , Reader cfg :> es, HasConfig cfg (Pool Connection)
      , Reader cfg :> es, HasConfig cfg BaseURL
@@ -306,7 +306,7 @@ googleOAuthHandler
   :: forall (api :: Type -> Type) db cfg es frontendRoute.
      ( IOE :> es
      , Database Postgres db
-     , HasConfig cfg (Jenga.Backend.Utils.HasConfig.FullRouteEncoder api frontendRoute)
+     , HasConfig cfg (FullRouteEncoder api frontendRoute)
      , HasRoute api (R frontendRoute)
      , Reader cfg :> es, HasConfig cfg (Pool Connection)
      , Reader cfg :> es, HasConfig cfg BaseURL
@@ -382,7 +382,7 @@ discordOAuthHandler
   :: forall (api :: Type -> Type) db cfg es frontendRoute.
      ( IOE :> es
      , Database Postgres db
-     , HasConfig cfg (Jenga.Backend.Utils.HasConfig.FullRouteEncoder api frontendRoute)
+     , HasConfig cfg (FullRouteEncoder api frontendRoute)
      , HasRoute api (R frontendRoute)
      , Reader cfg :> es, HasConfig cfg (Pool Connection)
      , Reader cfg :> es, HasConfig cfg BaseURL

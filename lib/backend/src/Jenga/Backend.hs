@@ -10,15 +10,9 @@
 
 -- | Snap-based backend scaffolding for the Jenga stack.
 --
--- The MTL-era ghcjs frontend rendering pipeline (renderFrontendHtml,
--- serveGhcjsApp, GhcjsWidgets, HasCookies Snap) previously lived here
--- and depended on 'FrontendWidgetT'. That transformer has been removed
--- as part of the effect port. The SSR pipeline is now provided by
--- 'jenga-backend-servant' via 'Jenga.Frontend.renderFrontendHtml'.
---
--- What remains in this module is the Snap-agnostic plumbing that other
--- callers still rely on: config lookup, page-name / route decoding,
--- static-asset paths, and a couple of small Snap runner helpers.
+-- Encoder-routed applications retain their backend startup continuation
+-- and render either frontend API through Jenga.Frontend. Servant hosts
+-- are provided separately by jenga-backend-servant.
 module Jenga.Backend
   ( Backend (..)
   , StaticAssets (..)
@@ -27,6 +21,7 @@ module Jenga.Backend
   -- * Snap runners
   , runSnapWithCommandLineArgs
   , runSnapWithConfig
+  , runBackend
   , prettifyOutput
   -- * Route helpers
   , getPageName
@@ -51,6 +46,7 @@ import Control.Monad.Except
 #endif
 
 import Data.ByteString (ByteString)
+import Control.Applicative ((<|>))
 import qualified Data.ByteString.Char8 as BSC8
 import Data.Default (Default (..))
 import Data.Functor.Identity
@@ -60,7 +56,11 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import GHC.Generics (Generic)
 import qualified Jenga.ExecutableConfig.Lookup as Lookup
+import qualified Jenga.Asset.Serve.Snap as Assets
+import qualified Jenga.Frontend as Frontend
+import qualified Reflex.Effectful.DomHost as DOM
 import Jenga.Route
+import qualified Snap
 import Snap (MonadSnap, Snap, commandLineConfig, defaultConfig, getsRequest, httpServe
             , rqPathInfo, rqQueryString)
 import Snap.Internal.Http.Server.Config (Config (accessLog, errorLog), ConfigLog (ConfigIoLog))
@@ -70,6 +70,42 @@ data Backend backendRoute frontendRoute = Backend
   { _backend_routeEncoder :: Encoder (Either Text) Identity (R (FullRoute backendRoute frontendRoute)) PageName
   , _backend_run :: ((R backendRoute -> Snap ()) -> IO ()) -> IO ()
   } deriving (Generic)
+
+-- | Host an encoder-routed application while retaining its startup/workers
+-- continuation. Servant applications use Jenga.Backend.Servant instead.
+runBackend :: Backend br fr -> Frontend.Frontend (R fr) -> IO ()
+runBackend backend frontend = do
+  encoder <- either (fail . T.unpack) pure $ checkEncoder $ _backend_routeEncoder backend
+  configs <- getPublicConfigs
+  _backend_run backend $ \handleBackend -> runSnapWithCommandLineArgs $
+    Snap.route
+      [ ("static", Assets.serveAssets "static.assets" "static")
+      , ("ghcjs", Assets.serveAssets "frontend.jsexe.assets" "frontend.jsexe")
+      ] <|> serveEncodedRoute encoder configs frontend handleBackend
+
+serveEncodedRoute
+  :: Encoder Identity Identity (R (FullRoute br fr)) PageName
+  -> Map Text ByteString -> Frontend.Frontend (R fr)
+  -> (R br -> Snap ()) -> Snap ()
+serveEncodedRoute encoder configs frontend handleBackend = do
+  route <- runIdentity <$> getRouteWith encoder
+  case route of
+    FullRoute_Backend r :/ args -> handleBackend (r :/ args)
+    FullRoute_Frontend (JengaRoute_App r) :/ args ->
+      serveEncodedFrontend encoder configs frontend (r :/ args)
+    FullRoute_Frontend (JengaRoute_Resource _) :/ _ -> Snap.pass
+
+serveEncodedFrontend
+  :: Encoder Identity Identity (R (FullRoute br fr)) PageName
+  -> Map Text ByteString -> Frontend.Frontend (R fr) -> R fr -> Snap ()
+serveEncodedFrontend encoder configs frontend route = do
+  cookies <- fmap (\c -> (Snap.cookieName c, Snap.cookieValue c)) <$> Snap.getsRequest Snap.rqCookies
+  html <- liftIO $ Frontend.renderFrontendHtml configs cookies
+    (renderObeliskFrontendRoute encoder) route frontend (pure ()) $
+      DOM.elAttr "script" (Map.fromList [("src", renderAllJsPath encoder), ("defer", "")]) DOM.blank
+  Snap.modifyResponse $ Snap.setContentType staticRenderContentType
+  Snap.modifyResponse $ Snap.setHeader "Cache-Control" "no-store, private"
+  Snap.writeBS html
 
 prettifyOutput :: IO ()
 prettifyOutput = do

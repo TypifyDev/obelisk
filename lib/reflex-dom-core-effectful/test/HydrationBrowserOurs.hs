@@ -65,10 +65,11 @@ import qualified GHCJS.DOM.Document as Document
 import Reflex.Patch.DMapWithMove
 import System.Directory
 import System.Environment
-import System.IO (stderr)
+import System.IO (stderr, hPrint)
 import System.IO.Silently
 import System.IO.Temp
 import System.Process
+import System.Info (os)
 import System.Which (staticWhich)
 import qualified Test.HUnit as HUnit
 import qualified Test.Hspec as H
@@ -153,11 +154,10 @@ deriving instance MonadFail WD
 
 main :: IO ()
 main = do
-  -- 'unshareNetwork' calls the 'unshare(2)' syscall to isolate the test
-  -- in a new user + network namespace. Requires CAP_SYS_ADMIN (or
-  -- unprivileged-user-namespaces support). Under nix-shell without
-  -- privilege, it fails with "invalid argument". Skippable via
-  -- NO_UNSHARE=1 for local runs.
+  -- Linux isolates user/network namespaces; macOS applies an inherited
+  -- loopback-only network sandbox (JENGA_DEV_PLATFORM=macos required).
+  -- macOS selects available loopback ports in the shared host namespace.
+  -- NO_UNSHARE remains an explicit local diagnostic escape hatch.
   wantUnshare <- (== Nothing) <$> lookupEnv "NO_UNSHARE"
   when wantUnshare unshareNetwork
   isHeadless <- (== Nothing) <$> lookupEnv "NO_HEADLESS"
@@ -166,7 +166,10 @@ main = do
       let browserPath = T.strip $ T.pack chromium
       when (T.null browserPath) $ fail "No browser found"
       withDebugging <- isNothing <$> lookupEnv "NO_DEBUG"
-      let wdConfig = WD.defaultConfig { WD.wdPort = fromIntegral $ _selenium_portNumber selenium }
+      let wdConfig = WD.defaultConfig
+            { WD.wdPort = fromIntegral $ _selenium_portNumber selenium
+            , WD.wdBasePath = if os == "darwin" then "" else WD.wdBasePath WD.defaultConfig
+            }
           chromeCaps' = WD.getCaps $ chromeConfig browserPath chromeFlags
       hspec (tests withDebugging wdConfig [(chromeCaps', "chrome")] selenium) `finally` _selenium_stopServer selenium
 
@@ -1660,19 +1663,23 @@ data Selenium = Selenium
 
 startSeleniumServer :: PortNumber -> IO (IO ())
 startSeleniumServer port = do
-  (_,_,_,ph) <- createProcess $ (proc "selenium-server" ["-port", show port])
-    { std_in = NoStream
-    , std_out = NoStream
-    , std_err = NoStream
+  let driver = if os == "darwin"
+        then proc "chromedriver" ["--port=" ++ show port]
+        else proc "selenium-server" ["-port", show port]
+  (_,_,_,ph) <- createProcess $ driver
+    { std_in = if os == "darwin" then Inherit else NoStream
+    , std_out = if os == "darwin" then Inherit else NoStream
+    , std_err = if os == "darwin" then Inherit else NoStream
     }
   return $ terminateProcess ph
 
 withSeleniumServer :: (Selenium -> IO ()) -> IO ()
 withSeleniumServer f = do
-  stopServer <- startSeleniumServer seleniumPort
+  port <- testPort seleniumPort
+  stopServer <- startSeleniumServer port
   threadDelay $ 1000 * 1000 * 2 -- TODO poll or wait on a a signal to block on
   f $ Selenium
-    { _selenium_portNumber = seleniumPort
+    { _selenium_portNumber = port
     , _selenium_stopServer = stopServer
     }
 
@@ -1800,20 +1807,24 @@ testWidgetDebug' hardFailure withDebugging beforeJS afterSwitchover bodyWidget =
               putStrLnDebug "putting waitUntilSwitchover"
               liftIO $ putMVar waitUntilSwitchover ()
               putStrLnDebug "put waitUntilSwitchover"
-        putStrLnDebug "running attachHydrationWidgetWithFailure (WidgetEff port)"
+        putStrLnDebug "running scoped hydration runner with Effectful static rendering"
         doc <- DOM.currentDocumentUnchecked
         body <- Document.getBodyUnchecked doc
-        _ <- DH.attachHydrationWidgetWithFailure @Global onFailure switchOverAction body bodyWidget
-        putStrLnDebug "syncPoint after attachHydrationWidgetWithFailure"
-        syncPoint
+        DH.withAttachHydrationWidgetWithFailure @Global onFailure switchOverAction body bodyWidget $ \events fc -> do
+          putStrLnDebug "syncPoint after withAttachHydrationWidgetWithFailure"
+          syncPoint
+          liftIO $ DH.processAsyncEvents events fc
   application <- liftIO $ jsaddleOr defaultConnectionOptions entryPoint $ \_ sendResponse -> do
     putStrLnDebug "sending response"
     r <- sendResponse $ responseLBS status200 [] $ "<!doctype html>\n" <> LBS.fromStrict html
     putStrLnDebug "sent response"
     return r
   waitJSaddle <- liftIO newEmptyMVar
+  port <- liftIO $ testPort jsaddlePort
   let settings = foldr ($) Warp.defaultSettings
-        [ Warp.setPort $ fromIntegral $ toInteger jsaddlePort
+        [ Warp.setPort $ fromIntegral $ toInteger port
+        , Warp.setHost "127.0.0.1"
+        , Warp.setOnException (\_ exception -> hPrint stderr exception)
         , Warp.setBeforeMainLoop $ do
             putStrLnDebug "putting waitJSaddle"
             putMVar waitJSaddle ()
@@ -1826,7 +1837,7 @@ testWidgetDebug' hardFailure withDebugging beforeJS afterSwitchover bodyWidget =
     putStrLnDebug "taking waitJSaddle"
     liftIO $ takeMVar waitJSaddle
     putStrLnDebug "opening page"
-    WD.openPage $ "http://localhost:" <> show jsaddlePort
+    WD.openPage $ "http://127.0.0.1:" <> show port
     putStrLnDebug "running beforeJS"
     a <- beforeJS
     putStrLnDebug "putting waitBeforeJS"

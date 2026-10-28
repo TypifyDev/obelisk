@@ -1,27 +1,19 @@
 module Jenga.Common.Cookie where
 
---experimental
---import Data.Map as Map
---import Database.Beam.Postgres
---import Common.Types
 import Jenga.Common.BeamExtras
 import Data.String
 import Data.Signed
-import Rhyolite.Account --hiding (Beamable, PrimaryKey)
+import Rhyolite.Account
 import qualified Data.Aeson as A
 import qualified Data.ByteString.Lazy as LBS
 import qualified Data.ByteString as BS
---import Web.ClientSession as CS
 import qualified Data.ByteString.Base64 as B64
 import qualified Data.Text.Encoding as T
 
 clientTypeHeader :: IsString s => s
 clientTypeHeader = "X-ClientType"
 
--- | Assert phantom type
--- | Do we ever actually need this???
--- |   -> only if we SetCookie... but this
--- |      is now handled by backend
+-- | Encode an account token using the authentication-cookie wire format.
 keylessTo :: Signed (Id Account) -> BS.ByteString
 keylessTo = keylessTo'
 
@@ -36,12 +28,9 @@ keylessTo' signedAcctID =
   unSigned signedAcctID
 
 keylessFrom' :: BS.ByteString -> Maybe (Signed a)
-keylessFrom' bs_ =
- fmap (Signed . T.decodeUtf8)
- $ eithToMaybe
- $ B64.decode bs_
-  where
-    eithToMaybe = \case { Right x -> Just x ; Left _ -> Nothing }
+keylessFrom' raw = do
+  decoded <- either (const Nothing) Just $ B64.decode raw
+  Signed <$> either (const Nothing) Just (T.decodeUtf8' decoded)
 
 -- | Signed is a phantom type. We dont actually
 -- | touch its inner text

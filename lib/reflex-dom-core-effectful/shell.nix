@@ -2,11 +2,18 @@
 let
   pkgs = nixpkgs;
   hp   = pkgs.haskellPackages;
+  chromium = if pkgs.stdenv.hostPlatform.isDarwin then
+    let browserPkgs = import pkgs.path {
+          system = pkgs.stdenv.hostPlatform.system;
+          config.allowUnfreePredicate = p: pkgs.lib.getName p == "google-chrome";
+        };
+    in pkgs.writeShellScriptBin "chromium" ''
+      exec ${browserPkgs.google-chrome}/bin/google-chrome-stable "$@"
+    ''
+    else pkgs.chromium;
 
-  # Only the test-suite Haskell deps that aren't in the port's
-  # cabal-resolved set: nixpkgs has these patched to compile together
-  # (upstream Hackage versions do not — hspec-webdriver-1.2.2 imports
-  # symbols removed in webdriver 0.11+).
+  # Test-suite dependencies for the standalone shell. cabal.project and
+  # the browser components constrain WebDriver to the compatible API.
   testDeps = with hp; [
     hspec-webdriver
     webdriver
@@ -21,7 +28,6 @@ let
     temporary
     process
     which
-    linux-namespaces
     dependent-map
     dependent-sum
     dependent-sum-template
@@ -38,11 +44,12 @@ let
     some
     directory
     filepath
-  ];
+  ] ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [ hp.linux-namespaces ];
 
   ghc = hp.ghcWithPackages (_: testDeps);
 in
 pkgs.mkShell {
+  JENGA_DEV_PLATFORM = if pkgs.stdenv.hostPlatform.isDarwin then "macos" else "linux";
   buildInputs = [
     ghc
     pkgs.cabal-install
@@ -51,7 +58,7 @@ pkgs.mkShell {
     pkgs.zlib
     pkgs.pcre
     # Runtime: browser + driver + selenium (fetched lazily on first invoke).
-    pkgs.chromium
+    chromium
     pkgs.chromedriver
     pkgs.selenium-server-standalone
   ];

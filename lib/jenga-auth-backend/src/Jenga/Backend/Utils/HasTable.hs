@@ -12,7 +12,7 @@ import Effectful (Eff, (:>), IOE)
 import qualified Effectful.Reader.Static as ER
 import qualified Data.Text as T
 import qualified Jenga.Route as ObR
-import Jenga.Route (renderObeliskFrontendRoute, renderObeliskBackendRoute)
+import Jenga.Route (FullRouteEncoder, renderObeliskFrontendRoute, renderObeliskBackendRoute)
 
 
 class HasJengaTable dbHost db tbl where

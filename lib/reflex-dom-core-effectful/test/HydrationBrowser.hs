@@ -65,10 +65,11 @@ import qualified GHCJS.DOM.Document as Document
 import Reflex.Patch.DMapWithMove
 import System.Directory
 import System.Environment
-import System.IO (stderr)
+import System.IO (stderr, hPrint)
 import System.IO.Silently
 import System.IO.Temp
 import System.Process
+import System.Info (os)
 import System.Which (staticWhich)
 import qualified Test.HUnit as HUnit
 import qualified Test.Hspec as H
@@ -153,11 +154,10 @@ deriving instance MonadFail WD
 
 main :: IO ()
 main = do
-  -- 'unshareNetwork' calls the 'unshare(2)' syscall to isolate the test
-  -- in a new user + network namespace. Requires CAP_SYS_ADMIN (or
-  -- unprivileged-user-namespaces support). Under nix-shell without
-  -- privilege, it fails with "invalid argument". Skippable via
-  -- NO_UNSHARE=1 for local runs.
+  -- Linux isolates user/network namespaces; macOS applies an inherited
+  -- loopback-only network sandbox (JENGA_DEV_PLATFORM=macos required).
+  -- macOS selects available loopback ports in the shared host namespace.
+  -- NO_UNSHARE remains an explicit local diagnostic escape hatch.
   wantUnshare <- (== Nothing) <$> lookupEnv "NO_UNSHARE"
   when wantUnshare unshareNetwork
   isHeadless <- (== Nothing) <$> lookupEnv "NO_HEADLESS"
@@ -1675,18 +1675,19 @@ startSeleniumServer port = do
     , "--verbose"
     , "--log-path=/tmp/chromedriver-test.log"
     ])
-    { std_in = NoStream
-    , std_out = NoStream
-    , std_err = NoStream
+    { std_in = if os == "darwin" then Inherit else NoStream
+    , std_out = if os == "darwin" then Inherit else NoStream
+    , std_err = if os == "darwin" then Inherit else NoStream
     }
   return $ terminateProcess ph
 
 withSeleniumServer :: (Selenium -> IO ()) -> IO ()
 withSeleniumServer f = do
-  stopServer <- startSeleniumServer seleniumPort
+  port <- testPort seleniumPort
+  stopServer <- startSeleniumServer port
   threadDelay $ 1000 * 1000 * 2 -- TODO poll or wait on a a signal to block on
   f $ Selenium
-    { _selenium_portNumber = seleniumPort
+    { _selenium_portNumber = port
     , _selenium_stopServer = stopServer
     }
 
@@ -1839,8 +1840,11 @@ testWidgetDebug' hardFailure withDebugging beforeJS afterSwitchover bodyWidget =
     putStrLnDebug "sent response"
     return r
   waitJSaddle <- liftIO newEmptyMVar
+  port <- liftIO $ testPort jsaddlePort
   let settings = foldr ($) Warp.defaultSettings
-        [ Warp.setPort $ fromIntegral $ toInteger jsaddlePort
+        [ Warp.setPort $ fromIntegral $ toInteger port
+        , Warp.setHost "127.0.0.1"
+        , Warp.setOnException (\_ exception -> hPrint stderr exception)
         , Warp.setBeforeMainLoop $ do
             putStrLnDebug "putting waitJSaddle"
             putMVar waitJSaddle ()
@@ -1853,7 +1857,7 @@ testWidgetDebug' hardFailure withDebugging beforeJS afterSwitchover bodyWidget =
     putStrLnDebug "taking waitJSaddle"
     liftIO $ takeMVar waitJSaddle
     putStrLnDebug "opening page"
-    WD.openPage $ "http://localhost:" <> show jsaddlePort
+    WD.openPage $ "http://127.0.0.1:" <> show port
     putStrLnDebug "running beforeJS"
     a <- beforeJS
     putStrLnDebug "putting waitBeforeJS"

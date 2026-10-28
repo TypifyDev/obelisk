@@ -32,8 +32,6 @@ import Control.Monad.Trans.Reader
 import Control.Monad.Catch
 import Control.Monad.IO.Class
 import qualified Data.Aeson as A
-import Data.Either
-import Data.Functor.Identity
 import qualified Data.List.NonEmpty as NonEmpty
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as T
@@ -41,20 +39,20 @@ import qualified Data.ByteString.Base64 as B64
 import qualified Data.ByteString as BS
 
 
--- | This is currently a toss up as we switch from an old semi-broken system
--- | to a new one ... which may be also just as unknown
--- | this works but ... why does this happen??
+-- | Accept the quoted token representation used by existing clients.
 removeQuotes :: T.Text -> T.Text
 removeQuotes = T.dropWhile (== '"') . T.dropWhileEnd (== '"')
-  -- or is it id
-  -- or is it: T.init . (T.drop 1)
 
 removeQuotesBS :: BS.ByteString -> BS.ByteString
 removeQuotesBS =
-  --BS.dropWhile (== '"') . BS.dropWhileEnd (== '"')
-  T.encodeUtf8
-  . removeQuotes
-  . T.decodeUtf8
+  BS.dropWhile (== 34) . BS.dropWhileEnd (== 34)
+
+-- | Invalid encoding and invalid signatures are both authentication failures.
+decodeAccountCookie :: Key -> BS.ByteString -> Maybe AccountId
+decodeAccountCookie key raw = do
+  bytes <- either (const Nothing) Just $ B64.decode raw
+  token <- either (const Nothing) Just $ T.decodeUtf8' bytes
+  readSignedWithKey key $ Signed $ removeQuotes token
 
 
 --- Cookie Authentication Handlers
@@ -78,67 +76,17 @@ privateRoute fma = do
   case mCookie of
     Nothing -> writeJSON'' $ (Left NoAuth_NoCookie)
     Just cookie -> do
-      let
-        --removeQuotes = T.init . (T.drop 1) -- TODO: why does this happen ?
-        signed :: Signed (PrimaryKey Rhyolite.Account.Account Identity)
-        signed = Signed . removeQuotes . T.decodeUtf8 . (fromRight undefined) . B64.decode . cookieValue $ cookie
-      key <- asksM --  _clientSessionKey
-      case readSignedWithKey key signed of
+      key <- asksM
+      case decodeAccountCookie key (cookieValue cookie) of
         Nothing -> writeJSON'' $ (Left NoAuth_CantReadKey)
         Just acctId -> do
           _ <- fma acctId -- AcctID $ fromIntegral int64
           pure ()
 
--- setAuthCookieHeader :: MonadSnap m => Signed AccountId -> EnvT m ()
--- setAuthCookieHeader signedTokenUserID = do
---   --host <- decideHost
---   baseRoute <- asksCfg _baseRoute
---   let cookieValue_ = B64.encode . T.encodeUtf8 . unSigned $ signedTokenUserID
---   -- ace in case we change our domain... this should more likely than not still work
---   case T.isInfixOf "ace" (T.pack . show $ baseRoute) of
---     True -> do
---       let h = T.encodeUtf8
---               . T.strip
-
---               . T.pack
---               . fromMaybe (error "will never fire")
---               . uriHost $ baseRoute
---       Snap.modifyResponse $ Snap.setHeader "Set-Cookie"
---         $ T.encodeUtf8 authCookieName
---         <> "=" <> cookieValue_ <> "; "
---         <> "Path=/; "
---         -- We need to set this no matter what if acetalent.io to
---         -- ensure android and ios work properly
---         <> "Domain=" <> h <> "; "
---         <> "HttpOnly; Secure; SameSite=None"
---     False -> do
---       -- Either pure localhost or localhost via ngrok tunnel
---       ngrok <- asksCfg _ngrokRoute
---       case ngrok >>= uriHost of
---         Nothing -> do
---           Snap.modifyResponse $ Snap.setHeader "Set-Cookie"
---             $ T.encodeUtf8 authCookieName
---             <> "=" <> cookieValue_ <> "; "
---             <> "Path=/; "
---             -- Do we need the subdomain?
---             -- <> "Domain=" <> "b674-207-136-101-252.ngrok-free.app" <> "; "
---             <> "HttpOnly; Secure; SameSite=None"
---         Just ngrokHost -> do
---           Snap.modifyResponse $ Snap.setHeader "Set-Cookie"
---             $ T.encodeUtf8 authCookieName
---             <> "=" <> cookieValue_ <> "; "
---             <> "Path=/; "
---             -- Do we need the subdomain?
---             <> "Domain=" <> (T.encodeUtf8 . T.pack $ ngrokHost) <> "; "
---             <> "HttpOnly; Secure; SameSite=None"
-
-
-  -- originHeader <- Snap.getHeader "Origin" <$> getRequest
-  -- liftIO $ print originHeader
 
 
 
--- | Is copy of privateRoute with allowed users
+-- | Authenticate the cookie and load the account's current role from the database.
 dependentPrivateRoute
   :: forall db m a.
      ( MonadSnap m
@@ -158,11 +106,7 @@ dependentPrivateRoute uTypeTbl (AuthCookieName authCookieName) dbConn key fma = 
       liftIO $ putStrLn "depeendentPrivateRoute: No Cookie Found"
       liftSnap $ writeJSON' $ (Left NoAuth_NoCookie :: Either (BackendError ()) ()) --  :: Either T.Text ())
     Just cookieAID -> do
-      let
-        --removeQuotes = id -- T.init . (T.drop 1) -- TODO: why does this happen ?
-        signed :: Signed (PrimaryKey Account Identity)
-        signed = Signed . removeQuotes . T.decodeUtf8 . (fromRight undefined) . B64.decode . cookieValue $ cookieAID
-      case readSignedWithKey key signed of
+      case decodeAccountCookie key (cookieValue cookieAID) of
         Nothing -> liftSnap $ writeJSON' $ (Left NoAuth_CantReadKey  :: Either (BackendError ()) ()) -- "couldnt read key" :: Either T.Text ())
         -- We still have this UserType on the frontend so that
         -- we can run conditional logic on what to show the user
@@ -175,7 +119,7 @@ dependentPrivateRoute uTypeTbl (AuthCookieName authCookieName) dbConn key fma = 
               _ <- fma userType acctId
               pure ()
 
--- NOTE: could easily generalize this if we ever have other signed data in headers?
+-- | Decode the signed account cookie, preserving typed authentication failures.
 getAccountIdFromCookies
   :: ( A.ToJSON e
      , MonadSnap m
@@ -189,22 +133,11 @@ getAccountIdFromCookies = do
   mCookie <- getCookie $ T.encodeUtf8 authCookieName
   case mCookie of
     Nothing -> pure $ Left NoAuth_NoCookie
-    Just cookieSignedId -> do
-      let
-        --removeQuotes = T.init . (T.drop 1) -- TODO: why does this happen ?
-        eithDecodedB64 = B64.decode . cookieValue $ cookieSignedId
-      case eithDecodedB64 of
-        Left _decodeErr -> pure $ Left NoAuth_CantReadKey -- "Base64 Decode Error: " <> T.pack decodeErr
-        Right decodedB64 -> do
-          let
-            -- for type annotation
-            signed :: Signed (PrimaryKey Account Identity)
-            signed = Signed . removeQuotes . T.decodeUtf8 $ decodedB64
-          case readSignedWithKey cskey signed of
-            Nothing -> pure $ Left NoAuth_CantReadKey
-            Just acctId -> pure $ Right acctId
+    Just cookieSignedId -> pure $
+      maybe (Left NoAuth_CantReadKey) Right $
+        decodeAccountCookie cskey $ cookieValue cookieSignedId
 
--- | is copy of privateRoute with allowed users
+-- | Authenticate and restrict access to the supplied database roles.
 constrainedPrivateRoute
   :: forall db cfg m a.
      ( MonadSnap m
@@ -227,11 +160,7 @@ constrainedPrivateRoute dbConn key userTypesAllowed fma = do
     Nothing -> liftSnap $ do
       writeJSON'' $ (Left NoAuth_NoCookie :: Either (BackendError ()) ())
     Just cookieAID -> do
-      let
-        --removeQuotes = T.init . (T.drop 1) -- TODO: why does this happen / why do we need this drop?
-        signed :: Signed (PrimaryKey Account Identity)
-        signed = Signed . removeQuotes . T.decodeUtf8 . (fromRight undefined) . B64.decode . cookieValue $ cookieAID
-      case readSignedWithKey key signed of
+      case decodeAccountCookie key (cookieValue cookieAID) of
         Nothing -> liftSnap $ writeJSON'' $ (Left NoAuth_CantReadKey :: Either (BackendError ()) ())
         -- We still have this UserType on the frontend so that
         -- we can run conditional logic on what to show the user
@@ -243,7 +172,7 @@ constrainedPrivateRoute dbConn key userTypesAllowed fma = do
             Nothing -> liftSnap $ writeJSON'' $ (Left NoAuth_NoUserTypeCookie :: Either (BackendError ()) ())
             Just userType -> do
               case elem userType userTypesAllowed of
-                False -> pure ()
+                False -> liftSnap $ writeJSON'' (Left NoAuth :: Either (BackendError ()) ())
                 True -> do
                   _ <- fma acctId
                   pure ()
@@ -268,11 +197,7 @@ privateRouteJSONOut key fma = do
     Nothing -> do
       liftSnap $ writeJSON'' $ (Left NoAuth_NoCookie :: Either (BackendError e) a)
     Just cookieAID -> do
-      let
-        --removeQuotes = T.init . (T.drop 1) -- TODO: why does this happen ?
-        signed :: Signed (PrimaryKey Account Identity)
-        signed = Signed . T.decodeUtf8 . (fromRight undefined) . B64.decode . cookieValue $ cookieAID
-      case (readSignedWithKey key) signed of
+      case decodeAccountCookie key (cookieValue cookieAID) of
         Nothing -> liftSnap $ writeJSON'' $ (Left NoAuth_CantReadKey :: Either (BackendError e) a)
         Just acctId@(AccountId (SqlSerial _)) -> do
           a <- fma acctId

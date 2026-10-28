@@ -14,6 +14,8 @@ import Data.Text.Encoding as T
 
 import Effectful (Eff, (:>))
 import Jenga.Frontend.Effectful.Configs (Configs, getConfig)
+import qualified Jenga.Configs.MTL as MTL
+import Data.ByteString (ByteString)
 
 getDomain :: URI -> Maybe T.Text
 getDomain baseUri_ =
@@ -22,15 +24,23 @@ getDomain baseUri_ =
 
 newtype RouteFilePath = RouteFilePath { getRouteFile :: T.Text }
 
-chooseJengaRouteFile :: Configs :> es => Eff es RouteFilePath
-chooseJengaRouteFile = fmap RouteFilePath $ do
-  route_ <- getConfig "common/route"
+-- | Choose the configuration key used for backend websocket routing.
+chooseJengaRouteFile :: MTL.HasConfigs m => m RouteFilePath
+chooseJengaRouteFile = chooseJengaRouteFileWith MTL.getConfig
+
+-- | Effectful counterpart of 'chooseJengaRouteFile'.
+chooseJengaRouteFileE :: Configs :> es => Eff es RouteFilePath
+chooseJengaRouteFileE = chooseJengaRouteFileWith getConfig
+
+chooseJengaRouteFileWith :: Monad m => (T.Text -> m (Maybe ByteString)) -> m RouteFilePath
+chooseJengaRouteFileWith readConfig = fmap RouteFilePath $ do
+  route_ <- readConfig "common/route"
   case parseURI =<< T.unpack . T.strip . T.decodeUtf8 <$> route_ of
     Nothing -> pure "common/route"
     Just uri_ -> case getDomain uri_ of
 #ifdef android_HOST_OS
       Just "localhost" -> do
-        getConfig "common/ngrokRoute" >>= \case
+        readConfig "common/ngrokRoute" >>= \case
           Nothing -> pure "common/route"
           Just _ -> pure "common/ngrokRoute"
 #else
@@ -38,15 +48,23 @@ chooseJengaRouteFile = fmap RouteFilePath $ do
 #endif
       _ -> pure "common/route"
 
-readJengaBaseURL :: Configs :> es => Eff es (Maybe BaseURL)
-readJengaBaseURL = do
-  route_ <- getConfig "common/route"
+-- | Read the frontend base URL using the platform's route configuration.
+readJengaBaseURL :: MTL.HasConfigs m => m (Maybe BaseURL)
+readJengaBaseURL = readJengaBaseURLWith MTL.getConfig
+
+-- | Effectful counterpart of 'readJengaBaseURL'.
+readJengaBaseURLE :: Configs :> es => Eff es (Maybe BaseURL)
+readJengaBaseURLE = readJengaBaseURLWith getConfig
+
+readJengaBaseURLWith :: Monad m => (T.Text -> m (Maybe ByteString)) -> m (Maybe BaseURL)
+readJengaBaseURLWith readConfig = do
+  route_ <- readConfig "common/route"
   uriString <- case parseURI =<< T.unpack . T.strip . T.decodeUtf8 <$> route_ of
     Nothing -> pure "https://acetalent.io"
     Just uri_ -> case getDomain uri_ of
 #ifdef android_HOST_OS
       Just "localhost" -> do
-        getConfig "common/ngrokRoute" >>= \case
+        readConfig "common/ngrokRoute" >>= \case
           Nothing -> pure . T.pack $ show uri_
           Just url -> pure . T.strip . T.decodeUtf8 $ url
 #else

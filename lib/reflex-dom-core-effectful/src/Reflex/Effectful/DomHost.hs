@@ -21,27 +21,13 @@
 {-# LANGUAGE UndecidableInstances  #-}
 
 -- |
--- Reflex.Effectful.DomHost
---
--- The single-module Dom host. Grows file-by-file, each addition
--- individually verified against the isolated build.
---
--- Current state:
---
---   - Pass 1 (GREEN): `runDomHost` — the leaf that discharges
---     `BaseEffectfulHostRow SI.Global`.
---
---   - Pass 2a (GREEN): Events surface — `EventTag`, `EventName`
---     GADT + `EventResult`, `EventResultType`, `WheelEventResult`,
---     `TouchEventResult`, `TouchResult`, `DeltaMode`, with
---     `GEq`/`GCompare` instances TH-derived.
---
--- Pass 2b+ (pending): Space, Types, Class effect surface, then
--- interpreters and composers.
+-- DOM building, hydration and static rendering on the Effectful Reflex host.
+-- Includes DOM event types, effect interpreters, MTL compatibility instances,
+-- and widget runners. Typify widgets can use MTL classes over these effects.
 module Reflex.Effectful.DomHost
   ( -- * The leaf
     runDomHost
-    -- * Events surface (Pass 2a)
+    -- * Events surface
   , EventTag (..)
   , EventName (..)
   , EventResult (..)
@@ -50,7 +36,7 @@ module Reflex.Effectful.DomHost
   , WheelEventResult (..)
   , TouchEventResult (..)
   , TouchResult (..)
-    -- * DomSpace + core types (Pass 2b)
+    -- * DomSpace + core types
   , DomSpace (..)
   , Namespace
   , DomFragment
@@ -68,7 +54,7 @@ module Reflex.Effectful.DomHost
   , EventFlags (..)
   , preventDefault
   , stopPropagation
-    -- * Element configs + results (Pass 2c)
+    -- * Element configs + results
   , ElementConfig (..)
   , elementConfig_namespace
   , elementConfig_initialAttributes
@@ -90,7 +76,7 @@ module Reflex.Effectful.DomHost
   , selectElementConfig_initialValue
   , selectElementConfig_elementConfig
   , SelectElement (..)
-    -- * DomBuilderE effect (Pass 2d)
+    -- * DomBuilderE effect
   , DomBuilderE (..)
   , DomBuilderSpaceE
   , DomBuilderTimelineE
@@ -109,7 +95,7 @@ module Reflex.Effectful.DomHost
   , HasDocumentE (..)
   , HasDocumentSpace
   , askDocument
-    -- * Event handlers (Pass 2e)
+    -- * Event handlers
   , EventType
   , withIsEvent
   , defaultDomEventHandler
@@ -122,7 +108,7 @@ module Reflex.Effectful.DomHost
   , getTouchEvent
   , getWheelEvent
   , showEventName
-    -- * DOM spaces (Pass 2f)
+    -- * DOM spaces
   , GhcjsDomHandler (..)
   , GhcjsDomHandler1 (..)
   , GhcjsDomEvent (..)
@@ -135,7 +121,7 @@ module Reflex.Effectful.DomHost
   , ghcjsEventSpec_handler
   , Pair1 (..)
   , Maybe1 (..)
-    -- * Hydration env + JSM' + DomRenderHookE (Pass 2g)
+    -- * Hydration env + JSM' + DomRenderHookE
   , HydrationState (..)
   , HydrationMode (..)
   , HydrationEnv (..)
@@ -150,14 +136,14 @@ module Reflex.Effectful.DomHost
   , DelayedHydration
   , askJSM
   , liftJSM
-    -- * DomRenderHookE interpreter + send-wrappers (Pass 2h)
+    -- * DomRenderHookE interpreter + send-wrappers
   , runDomRenderHook
   , withRenderHook
   , requestDomAction
   , requestDomAction_
-    -- * JSM' interpreter (Pass 2i)
+    -- * JSM' interpreter
   , runJSM'
-    -- * Wrap.hs: element-listener wiring (Pass 2j)
+    -- * Wrap.hs: element-listener wiring
   , EventFilterTriggerRef (..)
   , AttachDomListenersE
   , triggerBody
@@ -168,7 +154,7 @@ module Reflex.Effectful.DomHost
   , wrapDomEvent
   , wrapDomEventMaybe
   , wrapDomEventsMaybe
-    -- * Hydration.hs: mode + cursor + delayed queue + runner driver (Pass 2k)
+    -- * Hydration.hs: mode + cursor + delayed queue + runner driver
   , getHydrationMode
   , askUnreadyChildren
   , askCommitAction
@@ -184,7 +170,7 @@ module Reflex.Effectful.DomHost
   , removeSubsequentNodes
   , runHydrationRunner
   , runHydrationRunnerWithFailure
-    -- * Element.hs foundational block (Pass 2l.a)
+    -- * Element.hs foundational block
   , ChildReadyState (..)
   , TraverseChildImmediate (..)
   , TraverseChildHydration (..)
@@ -203,7 +189,7 @@ module Reflex.Effectful.DomHost
   , makeElement
   , textNodeImmediate
   , commentNodeImmediate
-    -- * Element.hs hydration walkers + node internals (Pass 2l.b)
+    -- * Element.hs hydration walkers + node internals
   , hydrateTextNode
   , hydrateComment
   , skipToAndReplaceComment
@@ -213,28 +199,28 @@ module Reflex.Effectful.DomHost
   , commentNodeInternal
   , skipHydrationAttribute
   , hydratableAttribute
-    -- * Element.hs element cluster (Pass 2l.c)
+    -- * Element.hs element cluster
   , elementImmediate
   , elementInternal
   , hydrateElement
   , shouldSkipHydration
   , driveChildRunner
-    -- * Element.hs focus helper (Pass 2l.d)
+    -- * Element.hs focus helper
   , mkHasFocus
   , focusChangeEv
-    -- * Element.hs form-element cluster (Pass 2l.e-g)
+    -- * Element.hs form-element cluster
   , inputElementImmediate
   , inputElementInternal
   , textAreaElementImmediate
   , textAreaElementInternal
   , selectElementImmediate
   , selectElementInternal
-    -- * Element.hs adjust drivers (Pass 2l.h)
+    -- * Element.hs adjust drivers
   , runWithReplaceEff
   , hoistTraverseWithKeyWithAdjust
   , hoistTraverseIntMapWithKeyWithAdjust
   , numberOccurrencesEff
-    -- * Instances.hs — DomBuilderE Effect GADT interpreters (Pass 2m)
+    -- * Instances.hs — DomBuilderE Effect GADT interpreters
   , runHasDocumentGhcjs
   , runHasDocumentHydration
   , runDomBuilderImmediate
@@ -278,18 +264,10 @@ module Reflex.Effectful.DomHost
   , Window (..)
   , WindowConfig (..)
   , wrapWindow
-    -- * AdjustableE-based composers (Phases 2-4) — parallel to the
-    -- above OLD-Adjustable composers. Route widget code through the
-    -- new higher-order 'AdjustableE (GuestEff t x) t' effect.
+    -- * Explicit guest effect rows
   , GuestEff
   , WidgetRowE
   , WidgetE_AE
-  -- OLD-ADJUSTABLE-COMMENTED-OUT: , hostPerformEventTAE
-  -- OLD-ADJUSTABLE-COMMENTED-OUT: , attachImmediateWidgetAE
-  -- OLD-ADJUSTABLE-COMMENTED-OUT: , attachWidgetAE
-  -- OLD-ADJUSTABLE-COMMENTED-OUT: , attachWidgetAE'
-  -- OLD-ADJUSTABLE-COMMENTED-OUT: , mainWidgetAE
-  -- , withAttachHydrationWidgetWithFailureAE  -- commented out 2026-08-31 (broken experiment)
     -- * Prerender — HasPrerender class + bridge to upstream Reflex.Dom.Prerender.Prerender
   , HasPrerender (..)
   , prerender_
@@ -596,7 +574,6 @@ import           Prelude                                     (Applicative (..),
 import qualified Reflex.Class                                as R
 import qualified Reflex.Host.Class                           as RH
 import qualified Reflex.Host.HeadlessEffectful               as HH
-import qualified Reflex.Host.AdjustableInterpose             as RHAI
 import qualified Reflex.Spider.Internal                      as R.SI
 
 import           JSDOM.Extras.JSM                            (JSM' (..), askJSM, liftJSM)
@@ -617,10 +594,10 @@ import qualified Data.Map                                    as Map
 import           Data.Maybe                                  (fromMaybe)
 import           Data.String                                 (IsString (..))
 
--- Element-configs deps (Pass 2c)
+-- Element-configs deps
 import qualified GHCJS.DOM.Types                             as DOM
 
--- Effectful deps (Pass 2d)
+-- Effectful deps
 import           Effectful                                   (Effect,
                                                               DispatchOf,
                                                               Dispatch (Dynamic),
@@ -631,6 +608,8 @@ import qualified Effectful                                   as E
 import           Effectful.Dispatch.Dynamic                  (send, reinterpret,
                                                               interpret,
                                                               interpose,
+                                                              localLend,
+                                                              localUnlift,
                                                               localUnliftIO,
                                                               localSeqUnliftIO)
 import           Effectful.Reader.Static                     (Reader, ask, local,
@@ -639,13 +618,13 @@ import           Effectful.State.Static.Local                (State, evalState,
                                                               get, gets, modify,
                                                               put, runState)
 
--- RenderHook interpreter deps (Pass 2h)
+-- RenderHook interpreter deps
 import           Control.Monad                               (void, forever)
 import           Control.Monad.IO.Class                      (MonadIO, liftIO)
 import qualified Reflex.Class                                as RC
 import           Language.Javascript.JSaddle                 (runJSM)
 
--- Wrap.hs deps (Pass 2j)
+-- Wrap.hs deps
 import           Control.Concurrent                          (forkIO)
 import           Control.Concurrent.Chan                     (Chan, newChan,
                                                               readChan,
@@ -673,7 +652,7 @@ import qualified Language.Javascript.JSaddle                 as JSaddle
 import           Language.Javascript.JSaddle                 (ghcjsPure,
                                                               isTruthy)
 
--- Element.hs foundational deps (Pass 2l.a)
+-- Element.hs foundational deps
 import           Data.Functor.Compose                        (Compose (..))
 import           Data.Patch.DMap                             (mapPatchDMap)
 import           Data.Patch.DMapWithMove                     (mapPatchDMapWithMove)
@@ -681,13 +660,11 @@ import qualified GHCJS.DOM.Document                          as Document
 import qualified GHCJS.DOM.Element                           as Element
 import           GHCJS.DOM.Types                             (DocumentFragment)
 
--- Element.hs Pass 2l.b deps
 import qualified Data.Text                                   as T
 import qualified GHCJS.DOM.Text                              as Text
--- Element.hs Pass 2l.d deps
 import qualified GHCJS.DOM.DocumentOrShadowRoot              as DocShadow
 
--- Element.hs Pass 2l.e-g deps (form elements)
+-- Form elements
 import qualified GHCJS.DOM.HTMLInputElement                  as Input
 import qualified GHCJS.DOM.HTMLSelectElement                 as Select
 import qualified GHCJS.DOM.HTMLTextAreaElement               as TextArea
@@ -696,13 +673,13 @@ import qualified Reflex.Dynamic                              as RD
 import           Data.Maybe                                  (catMaybes, isNothing, listToMaybe)
 import           Control.Monad.Fix                           (MonadFix)
 
--- Prerender.hs Pass 2o deps
+-- Prerendering
 import           Effectful                                   (withEffToIO)
 import           Effectful.Internal.Unlift                   (UnliftStrategy (..),
                                                               Persistence (..),
                                                               Limit (..))
 
--- Element.hs Pass 2l.h deps (adjust drivers)
+-- Adjustable DOM collections
 import qualified Data.Patch                                  as Patch
 import           Data.Patch                                  (Patch, PatchTarget)
 import           Data.Functor.Constant                       (Constant (..))
@@ -726,13 +703,12 @@ import           Data.Patch.Map                              (PatchMap (..))
 import           Data.Patch.MapWithMove                      (PatchMapWithMove (..))
 import qualified Data.Patch.MapWithMove                      as PatchMapWithMove
 
--- Instances.hs Pass 2m deps
 import           Effectful.Dispatch.Dynamic                  (localSeqUnlift)
 import           Data.Maybe                                  (isJust)
 import qualified Language.Javascript.JSaddle                 as JS
 import qualified Data.FastMutableIntMap                      as FastMutableIntMap
 
--- Main.hs Pass 2n deps
+-- Application hosting
 import qualified Language.Javascript.JSaddle.Warp            as Warp
 import qualified GHCJS.DOM                                   as GHCJS.DOM
 import           GHCJS.DOM.Document                          (getBodyUnchecked, getDefaultViewUnchecked)
@@ -811,12 +787,12 @@ import           Data.These                                  (These (..))
 import           GHCJS.DOM.HTMLInputElement                  (HTMLInputElement)
 import           GHCJS.DOM.HTMLTextAreaElement               (HTMLTextAreaElement)
 
--- Types.hs deps (Pass 2g)
+-- Types.hs deps
 import           Data.IORef                                  (IORef)
 import           GHCJS.DOM.Types                             (Document,
                                                               JSContextRef, Node)
 
--- EventHandlers deps (Pass 2e)
+-- EventHandlers deps
 import qualified GHCJS.DOM.ClipboardEvent                    as ClipboardEvent
 import qualified GHCJS.DOM.DataTransfer                      as DataTransfer
 import           GHCJS.DOM.EventM                            (EventM, event, on)
@@ -828,7 +804,7 @@ import qualified GHCJS.DOM.UIEvent                           as UIEvent ()
 import qualified GHCJS.DOM.WheelEvent                        as WheelEvent
 import qualified GHCJS.DOM.Window                            as Window
 
--- Space deps (Pass 2f)
+-- Space deps
 import           GHCJS.DOM.Types                             (uncheckedCastTo)
 
 -- Retrofit imports: shared pure types from variant B's reflex-dom-core.
@@ -946,7 +922,7 @@ import qualified Reflex.BehaviorWriter.Class                 as RBWC
 import qualified Language.Javascript.JSaddle.Types           as JSaddleTypes
 
 -- =====================================================================
--- Pass 1 — the leaf.
+-- the leaf.
 -- =====================================================================
 
 runDomHost
@@ -1011,7 +987,7 @@ type DomBuilder t space = DomBuilderE t space
 -- =====================================================================
 -- MTL-class instance for variant B's 'RDBC.DomBuilder' on @Eff es@.
 --
--- Task #207. Follows eff-reflex's bilingual pattern: variant B's
+-- Follows eff-reflex's bilingual pattern: variant B's
 -- MTL-shape widget code (Reflex.Dom.Widget.Basic, .Input, .Lazy, .Resize,
 -- Reflex.Dom.Location, .WebSocket, .Xhr) becomes directly callable on
 -- @Eff es@ whenever 'DomBuilderE' is in the row — no re-implementation
@@ -1270,7 +1246,7 @@ data MountableDomBuilderE (t :: Type) (space :: Type) :: Effect where
 type instance DispatchOf (MountableDomBuilderE t space) = 'Dynamic
 
 -- MTL-class instance for variant B's 'RDBC.MountableDomBuilder' on @Eff es@.
--- Task #207 companion — depends on the 'DomBuilder' instance.
+-- depends on the 'DomBuilder' instance.
 instance
   ( R.Reflex t
   , RDBC.DomBuilder t (Eff es)
@@ -1320,7 +1296,7 @@ askDocument = send @(HasDocumentE (HasDocumentSpace es)) AskDocument
 {-# INLINABLE askDocument #-}
 
 -- MTL-class instance for variant B's 'RDBC.HasDocument' on @Eff es@.
--- Task #207 companion — needs to agree with the 'DomBuilder' instance's
+-- needs to agree with the 'DomBuilder' instance's
 -- 'DomBuilderSpace' choice.
 instance
   ( HasDocumentE (HasDocumentSpace es) :> es
@@ -1332,7 +1308,7 @@ instance
   {-# INLINABLE askDocument #-}
 
 -- =====================================================================
--- Pass 2g — Types.hs: JSM' Effect + DomRenderHookE Effect +
+-- Types.hs: JSM' Effect + DomRenderHookE Effect +
 -- HydrationEnv + HydrationState + HydrationMode + WidgetE /
 -- HydrationRunnerE constraint synonyms + RunnerAction + DelayedHydration.
 --
@@ -1431,7 +1407,7 @@ type family DomRenderHookTimelineE (es :: [Effect]) :: Type where
   DomRenderHookTimelineE (_               : rest) = DomRenderHookTimelineE rest
 
 -- MTL-class instance for variant B's 'RDBC.DomRenderHook' on @Eff es@.
--- Task #207 companion. Fundep @m -> t@ resolved via an equality
+-- Fundep @m -> t@ resolved via an equality
 -- constraint pinning @t@ to 'DomRenderHookTimelineE es'.
 instance
   ( R.Reflex t
@@ -1557,73 +1533,10 @@ type WidgetE (t :: Type) (s :: Type) es =
   )
 
 -- =====================================================================
--- GuestEff / WidgetRow — the AdjustableE-based widget row shape.
---
--- Migration target: replace 'WidgetE's 'HH.Adjustable t' constraint with
--- 'HH.AdjustableE (GuestEff t x) t :> es'. AdjustableE is a first-class
--- higher-order effect whose sub-row is a concrete, user-specified list.
--- Sub effects get per-cohort fresh scopes via a caller-supplied runner;
--- outer sibling effects (Reader HydrationEnv, State HydrationState,
--- JSM', IOE) are untouched by cohort switching.
---
--- This coexists with 'WidgetE' during the migration. WidgetE stays for
--- callers still using the OLD 'Adjustable t' surface; WidgetRowE below
--- is the AdjustableE-routing target.
---
--- Design notes:
---   * 'GuestEff' lists effects that MUST be re-scoped per cohort. These
---     are effects whose per-cohort semantics matter for correctness —
---     Requester (per-cohort request bundling), PerformEvent (per-cohort
---     scheduling scope), PostBuild (fresh pb per cohort), TriggerEvent
---     (per-cohort trigger registration).
---   * DomBuilder is included so that per-cohort DOM operations get a
---     fresh scope — matches upstream reflex-dom-core's per-replacement
---     DOM lifecycle.
---   * Query is included if the app uses Rhyolite-style vessel queries;
---     otherwise it's inert.
---   * Sibling effects that DON'T need per-cohort re-scoping (Reader
---     HydrationEnv, State HydrationState, JSM', IOE, DomRenderHook)
---     stay in the outer row where 'AdjustableE' is installed.
--- =====================================================================
 
--- =====================================================================
--- NOTE — MTL Adjustable class + AdjustableE sub-row: fundamental shape mismatch.
---
--- The MTL 'Reflex.Adjustable.Class.Adjustable' class method has:
---   runWithReplace :: m a -> Event t (m b) -> m (a, Event t b)
--- CHILD action has the SAME 'm' as PARENT.
---
--- The new 'AdjustableE sub t' effect constructor has:
---   RunWithReplace' :: Eff sub a -> Event t (Eff sub b) -> AdjustableE sub t m (a, Event t b)
--- CHILD has ROW 'sub', DIFFERENT from parent's row 'es'.
---
--- Consequence: writing an MTL Adjustable instance on 'WidgetEff t x es' (or
--- a sibling newtype) that dispatches to 'send @(AdjustableE (someSub) t)'
--- requires bridging 'WidgetEff t x es a → Eff someSub a' at every
--- 'runWithReplace' call site. That bridge requires discharging the extra
--- effects in 'es' beyond 'someSub' — those interpreters (JSM', Reader
--- HydrationEnv, etc.) have state only available at composer setup time,
--- not per-call. So the MTL instance can't route directly to AdjustableE
--- with the general shape.
---
--- Workaround options (all with tradeoffs — see chat 2026-08-31 for
--- details):
---   1. Recursive row 'sub = es' (widget row includes AdjustableE es t).
---      GHC's type-family reducer diverges — proven by demo.
---   2. Bounded-depth 'sub = smaller row' at each level (compile-time cap).
---      Compiles; caps nesting depth (real code uses max depth 2).
---   3. Skip MTL for AdjustableE routing — user code calls
---      'HH.runWithReplace @sub @t' effect-based directly. Loses MTL
---      polymorphism but avoids the bridge.
---
--- Current state: MTL Adjustable instances (in DomHost, HeadlessEffectful)
--- route through OLD 'Adjustable t' effect (opaque m) which has no
--- sub-row parameter — works fine, matches upstream, no recursion issue.
--- AdjustableE remains available via effect-based helpers for callers who
--- want explicit sub-row typing at the call site (like the
--- 'runHeadlessAppEStandalone' composer's top-level guest).
--- =====================================================================
-
+-- Explicit guest rows are available for effect-based callers. MTL
+-- Adjustable instances use the same-monad Adjustable effect, preserving
+-- arbitrary widget nesting without requiring a recursive effect row.
 -- | The guest widget effect row. What runs inside each cohort of
 -- 'runWithReplace'/'traverseXxxWithAdjust' — the "guest" of the
 -- AdjustableE handler. Each caller of 'runAdjustableE' provides a
@@ -1652,43 +1565,18 @@ type GuestEff (t :: Type) (x :: Type) =
     ': HH.Requester t (R.SI.SpiderHostFrame x) Identity
     ': HH.BaseEffectfulHostRow x
 
--- | The AdjustableE-routing widget row.
---
--- Row order (head to tail):
---   Reader HydrationEnv, JSM'    -- outer widget scaffolding
---   AdjustableE (GuestEff t x) t -- the higher-order effect
---   ...BaseEffectfulHostRow x    -- Spider primitives + IOE
---
--- The composer 'attachWidgetAE'' discharges the head widget-scoped
--- effects right-to-left (runJSM' . runReader hEnv) then hands to
--- 'attachImmediateWidgetAE' which handles AdjustableE + Base.
---
--- NOTE (Phase 4 scope): DomRenderHook is NOT in this row yet.
--- 'runDomRenderHook' requires PerformEvent + TriggerEvent in the
--- ambient context (line ~1541 handler), but those effects live in
--- GuestEff (sub, per-cohort) not at outer. Two ways to integrate:
---   (a) Move DomRenderHook into GuestEff (per-cohort discharge chain)
---   (b) Add PerformEvent+TriggerEvent at outer as siblings (duplicates
---       sub instances but satisfies runDomRenderHook's need)
--- Deferred to Phase 5. Widget code in Phase 4 can do FRP-only things
--- (postBuild, performEvent, runWithReplace) but no DOM operations that
--- go through DomRenderHook.
---
--- Design: Requester is in SUB (via GuestEff), NOT here. The composer
--- ('hostPerformEventTAE') uses 'runAdjustableEStandalone' which installs
--- an internal Requester for cohort-request bundling — that internal
--- Requester is not visible in this row.
+-- | Hydration environment and JS context over the base host effects.
+-- This row alone does not provide DOM building or adjustment operations.
 type WidgetRowE (t :: Type) (x :: Type) =
   Reader (HydrationEnv t)
     ': JSM'
-    -- OLD-ADJUSTABLE-COMMENTED-OUT: HH.AdjustableE (GuestEff t x) t
     ': HH.BaseEffectfulHostRow x
 
 -- | Constraint synonym form of 'WidgetRowE' — usable in any 'es' that
 -- carries the required members. Widget helper signatures use this so
 -- they compose over user rows that add extra effects.
 type WidgetE_AE (t :: Type) (x :: Type) es =
-  ( -- OLD-ADJUSTABLE-COMMENTED-OUT: HH.AdjustableE (GuestEff t x) t :> es
+  (
     Reader (HydrationEnv t) :> es
   , JSM' :> es
   , IOE :> es
@@ -1738,7 +1626,7 @@ newtype RunnerAction t a = RunnerAction
 type DelayedHydration t = RunnerAction t ()
 
 -- =====================================================================
--- Pass 2h — DomRenderHookE interpreter + send-wrappers.
+-- DomRenderHookE interpreter + send-wrappers.
 --
 -- Semantics (matches upstream's DomRenderHookT + Requester composition):
 --   * WithRenderHook composes a JSM-transform onto a hook stack (via
@@ -1841,7 +1729,7 @@ runDomRenderHook act = do
     act
 
 -- =====================================================================
--- Pass 2i — runJSM' interpreter for the JSM' effect.
+-- runJSM' interpreter for the JSM' effect.
 --
 -- Semantics: LiftJSM runs the JSM body under the captured ctx via
 -- runJSM; WithJSContext hands the ctx to a raw-IO callback;
@@ -1863,7 +1751,7 @@ runJSM' ctx = interpret $ \_ cmd -> case cmd of
   AskJSContext    -> pure ctx
 
 -- =====================================================================
--- Pass 2j — Wrap.hs port: element event-listener wiring.
+-- Wrap.hs port: element event-listener wiring.
 --
 -- Contains:
 --   * EventFilterTriggerRef newtype — per-EventName slot filled at
@@ -2246,7 +2134,7 @@ subscribeDomEventJSM elementOnevent getValue eventChan trig = elementOnevent $ d
     writeChan eventChan [triggerRef :=> HH.TriggerInvocation v (pure ())]
 
 -- =====================================================================
--- Pass 2f — DOM spaces (verbatim from
+-- DOM spaces (verbatim from
 -- Reflex.Dom.Core).
 --
 -- 'GhcjsDomSpace' + 'HydrationDomSpace' phantom types + their
@@ -2266,13 +2154,11 @@ data Pair1 (f :: k -> Type) (g :: k -> Type) (a :: k) = Pair1 (f a) (g a)
 data Maybe1 f a = Nothing1 | Just1 (f a)
 
 -- =====================================================================
--- Pass 2k — Hydration.hs: mode + counters + cursor helpers +
+-- Hydration.hs: mode + counters + cursor helpers +
 -- delayed-step queue + runner driver.
 --
 -- Ported verbatim from Reflex.Dom.Core
--- Variant A's `localRunner` was noted-then-not-shipped; this port keeps
--- the same behaviour — its role is served by 'driveChildRunner'
--- (defined below in Pass 2l with the Element.hs port).
+-- 'driveChildRunner' re-enters the runner with the child hydration cursor.
 -- =====================================================================
 
 {-# INLINABLE getHydrationMode #-}
@@ -2445,7 +2331,7 @@ runHydrationRunnerWithFailure (RunnerAction action) onFailure prev parent = do
     liftIO onFailure
 
 -- =====================================================================
--- Pass 2l.a — Element.hs foundational block:
+-- Element.hs foundational block:
 --   * Adjust-helper vocabulary: ChildReadyState / TraverseChildImmediate
 --     / TraverseChildHydration / TraverseChild + drawChildUpdate.
 --   * Patch re-exports: mapPatchDMap, mapPatchDMapWithMove.
@@ -2673,7 +2559,7 @@ commentNodeImmediate (CommentNodeConfig t mSetContents) = do
   pure n
 
 -- =====================================================================
--- Pass 2l.b — Element.hs: hydration text/comment walkers + dispatch-
+-- Element.hs: hydration text/comment walkers + dispatch-
 -- mode text/comment factories + hydration-skip / hydratable attribute
 -- markers.
 --
@@ -2915,7 +2801,7 @@ hydratableAttribute :: IsString s => s
 hydratableAttribute = "data-ssr"
 
 -- =====================================================================
--- Pass 2l.c — Element.hs element cluster:
+-- Element.hs element cluster:
 --   * elementImmediate — immediate-mode element factory (uses wrap).
 --   * elementInternal  — dispatch-mode factory over HydrationDomSpace.
 --   * hydrateElement   — hydration-walker factory (uses
@@ -2924,8 +2810,7 @@ hydratableAttribute = "data-ssr"
 --   * shouldSkipHydration — JSM helper (skip flag OR missing ssr marker).
 --   * driveChildRunner — runner-scope re-entry with fresh parent + cursor.
 --
--- Timeline pinned via `t ~ R.SI.SpiderTimeline (SpiderTag t)` (matches
--- Pass 2j's wrap/allocateFilterTriggers/attachDomListeners constraint).
+-- The timeline equality matches the trigger and DOM listener operations.
 -- =====================================================================
 
 {-# INLINABLE elementImmediate #-}
@@ -3117,7 +3002,7 @@ driveChildRunner (RunnerAction childDom) newParent = do
        }
 
 -- =====================================================================
--- Pass 2l.d — Focus helper: mkHasFocus + focusChangeEv.
+-- Focus helper: mkHasFocus + focusChangeEv.
 -- Used by form-element factories (input/textarea/select) to compute
 -- the element's initial focus state + subsequent focus changes.
 -- =====================================================================
@@ -3150,7 +3035,7 @@ focusChangeEv e = R.leftmost
   ]
 
 -- =====================================================================
--- Pass 2l.e — Input element (immediate + internal + hydrate).
+-- Input element (immediate + internal + hydrate).
 -- =====================================================================
 
 {-# INLINABLE inputElementImmediate #-}
@@ -3396,7 +3281,7 @@ installFocusListener e domElement trigFocus = do
   requestDomAction_ @t $ liftIO . trigFocus <$> focusChange
 
 -- =====================================================================
--- Pass 2l.f — TextArea element (immediate + internal + hydrate).
+-- TextArea element (immediate + internal + hydrate).
 -- =====================================================================
 
 {-# INLINABLE textAreaElementImmediate #-}
@@ -3527,7 +3412,7 @@ textAreaHydrateRunner e domRef cfg vBeh trigs = do
   installFocusListener @t e domElement (thtFocus trigs)
 
 -- =====================================================================
--- Pass 2l.g — Select element (immediate + internal + hydrate).
+-- Select element (immediate + internal + hydrate).
 -- =====================================================================
 
 {-# INLINABLE selectElementImmediate #-}
@@ -3654,7 +3539,7 @@ selectHydrateRunner e domRef cfg trigs = do
   installFocusListener @t e domElement (shtFocus trigs)
 
 -- =====================================================================
--- Pass 2l.h — Element.hs adjust drivers (runWithReplaceEff +
+-- Element.hs adjust drivers (runWithReplaceEff +
 -- hoistTraverse* helpers).
 --
 -- runWithReplaceEff delegates the base traversal to HH.runWithReplaceE
@@ -3830,156 +3715,6 @@ runWithReplaceEff a0 a' = do
   pure (result0, snd <$> child')
 
 
-{- COMMENTED OUT 2026-08-31 — this AE experiment has intentional row-mismatch
-   errors documented in tasks #252 + Phase 6 blurb. Blocks reflex-dom-core-
-   effectful library build. Preserved in a block comment so the code stays
-   viewable; superseded by the interpose-cascade design in Reflex.Host.AdjustableInterpose.
-
--- =====================================================================
--- runWithReplaceEffAE — AE-dispatch parallel to 'runWithReplaceEff'.
---
--- User directive 2026-08-31: "only new adjustablE". This is the
--- experiment prototype — mirror of 'runWithReplaceEff' with ONLY the
--- dispatch line swapped: sends 'AdjustableE (GuestEff t x) t' instead
--- of OLD 'Adjustable t' (via 'HH.runWithReplaceE @t').
---
--- Purpose: surface the concrete row-bridge obstruction. Expected GHC
--- error: 'drawInitialChild :: Eff es (...)' but 'RunWithReplace''s
--- initial arg expects 'Eff (GuestEff t x) (...)'. The mismatch tells us
--- exactly what discharge chain we need to bridge 'es' → 'GuestEff t x'.
---
--- Preserves 'runWithReplaceEff' unchanged per no-deletion rule.
--- =====================================================================
-{-# INLINABLE runWithReplaceEffAE #-}
-runWithReplaceEffAE
-  :: forall t s a b es
-   . ( WidgetE t s es
-     , RH.ReflexHost t
-     , MonadFix (Eff es)
-     , HH.AdjustableE (GuestEff t (SpiderTag t)) t :> es
-     )
-  => Eff es a
-  -> R.Event t (Eff es b)
-  -> Eff es (a, R.Event t b)
-runWithReplaceEffAE a0 a' = do
-  initialEnv <- ask @(HydrationEnv t)
-  let hydrating              = hydrationEnv_hydrationMode  initialEnv
-      parentUnreadyChildren  = hydrationEnv_unreadyChildren initialEnv
-  (hydrateStart, before, beforeKey) <- skipToReplaceStart @t @s
-  haveEverBeenReady <- liftIO $ newIORef False
-  currentCohort     <- liftIO $ newIORef (-1 :: Int)
-  let myCommitAction :: JSM ()
-      myCommitAction = do
-        liftIO (readIORef haveEverBeenReady) >>= \case
-          True -> pure ()
-          False -> do
-            liftIO $ writeIORef haveEverBeenReady True
-            old <- liftIO $ readIORef parentUnreadyChildren
-            let !new = P.pred old
-            liftIO $ writeIORef parentUnreadyChildren new
-            when (new == 0) $ hydrationEnv_commitAction initialEnv
-  doc    <- asks @(HydrationEnv t) hydrationEnv_document
-  parent <- getParent @t
-  (hydrateEnd, after) <- skipToReplaceEnd @t @s beforeKey
-  let drawInitialChild :: Eff es (DelayedHydration t, a)
-      drawInitialChild = do
-        h <- liftIO $ readIORef hydrating
-        p' <- case h of
-          HydrationMode_Hydrating -> pure parent
-          HydrationMode_Immediate -> toNode <$> liftJSM_ (Document.createDocumentFragment doc)
-        unreadyChildren <- liftIO $ newIORef 0
-        let a0Wrapped = case h of
-              HydrationMode_Hydrating -> a0
-              HydrationMode_Immediate -> do
-                a <- a0
-                afterN <- liftIO $ readIORef after
-                _ <- insertBefore p' afterN
-                pure a
-        delayed <- case h of
-          HydrationMode_Hydrating -> liftIO $ newIORef (RunnerAction (pure ()) :: DelayedHydration t)
-          HydrationMode_Immediate -> pure $ hydrationEnv_delayed initialEnv
-        result <- localEnv @t (\env -> env
-              { hydrationEnv_unreadyChildren = unreadyChildren
-              , hydrationEnv_commitAction    = myCommitAction
-              , hydrationEnv_parent          = Left p'
-              , hydrationEnv_delayed         = delayed
-              }) a0Wrapped
-        dom <- case h of
-          HydrationMode_Hydrating -> liftIO $ readIORef delayed
-          HydrationMode_Immediate -> pure (RunnerAction (pure ()))
-        liftIO $ readIORef unreadyChildren >>= \case
-          0 -> writeIORef haveEverBeenReady True
-          _ -> modifyIORef' parentUnreadyChildren P.succ
-        pure (dom, result)
-  a'' <- numberOccurrencesEff @t a'
-  let drawChild :: Int -> Eff es b -> Eff es (Either (DelayedHydration t) (Maybe (JSM ())), b)
-      drawChild cohortId child = do
-        h <- liftIO $ readIORef hydrating
-        p' <- case h of
-          HydrationMode_Hydrating -> pure parent
-          HydrationMode_Immediate -> toNode <$> liftJSM_ (Document.createDocumentFragment doc)
-        unreadyChildren <- liftIO $ newIORef 0
-        let commitAction :: JSM ()
-            commitAction = do
-              c <- liftIO $ readIORef currentCohort
-              when (c P.<= cohortId) $ do
-                !beforeN <- liftIO $ readIORef before
-                !afterN  <- liftIO $ readIORef after
-                deleteBetweenExclusiveJSM' (toNode beforeN) (toNode afterN)
-                insertBeforeJSM' p' afterN
-                liftIO $ writeIORef currentCohort cohortId
-                myCommitAction
-        delayed <- case h of
-          HydrationMode_Hydrating -> liftIO $ newIORef (RunnerAction (pure ()) :: DelayedHydration t)
-          HydrationMode_Immediate -> pure $ hydrationEnv_delayed initialEnv
-        (freshPb, firePb) <- HH.newTriggerEventE @t
-        result <- localEnv @t (\env -> env
-              { hydrationEnv_unreadyChildren = unreadyChildren
-              , hydrationEnv_commitAction    = case h of
-                  HydrationMode_Hydrating -> myCommitAction
-                  HydrationMode_Immediate -> commitAction
-              , hydrationEnv_parent          = Left p'
-              , hydrationEnv_delayed         = delayed
-              })
-              (interpose @(HH.PostBuild t)
-                (\_ HH.GetPostBuild -> pure freshPb)
-                child)
-        liftIO (firePb ())
-        dom <- case h of
-          HydrationMode_Hydrating -> liftIO $ readIORef delayed
-          HydrationMode_Immediate -> pure (RunnerAction (pure ()))
-        uc <- liftIO $ readIORef unreadyChildren
-        let commitActionToRunNow
-              | uc == 0   = Just commitAction
-              | P.otherwise = Nothing
-            actions = case h of
-              HydrationMode_Hydrating -> Left dom
-              HydrationMode_Immediate -> Right commitActionToRunNow
-        pure (actions, result)
-  -- THE ONLY LINE THAT DIFFERS FROM 'runWithReplaceEff': dispatch via
-  -- AdjustableE 'send' instead of OLD 'HH.runWithReplaceE @t'.
-  --
-  -- Expected type error: drawInitialChild / drawChild produce 'Eff es'
-  -- values, but 'RunWithReplace'' constructor expects
-  -- 'Eff (GuestEff t (SpiderTag t))' for both. This is the documented
-  -- row-mismatch (DomHost.hs:1541-1577). Surfacing it here so we know
-  -- exactly what bridge (or GuestEff expansion) unblocks it.
-  ((hydrate0, result0), child') <-
-    send @(HH.AdjustableE (GuestEff t (SpiderTag t)) t) $
-      HH.RunWithReplace' drawInitialChild
-        (RC.ffor a'' $ \(cid, child) -> drawChild cid child)
-  let (hydrate', commitEv) = R.fanEither $ fmap fst child'
-  addHydrationStepWithSetup @t
-    (HH.holdE @t hydrate0 hydrate')
-    (\contents -> do
-        unRunnerAction hydrateStart
-        sampled <- HH.sampleE @t contents
-        unRunnerAction sampled
-        unRunnerAction hydrateEnd)
-  requestDomAction_ @t (R.fmapMaybe P.id commitEv)
-  pure (result0, snd <$> child')
-
--} -- end COMMENTED OUT runWithReplaceEffAE
 
 -- | Raw-JSM DOM helpers (used inside commit actions fired from
 -- requestDomAction_, which requires JSM bodies, not Eff bodies).
@@ -4233,7 +3968,7 @@ hoistTraverseIntMapWithKeyWithAdjust base updateChildUnreadiness applyDomUpdate_
   pure (result0, result')
 
 -- =====================================================================
--- Pass 2m — Instances.hs: DomBuilderE Effect GADT interpreters.
+-- Instances.hs: DomBuilderE Effect GADT interpreters.
 --
 -- Wires DomBuilderE t GhcjsDomSpace + DomBuilderE t HydrationDomSpace
 -- constructors to Element.hs / Wrap.hs factories via 'interpret' +
@@ -4680,6 +4415,7 @@ withDomHost act = do
 -- variant B's implicit @DomTimeline = Spider@ assumption.
 type ImmediateWidgetE (t :: Type) es =
   ( MonadFix (Eff es)
+  , HH.PerformableForRow es ~ RH.HostFrame t
   , DomBuilderSpaceE es ~ GhcjsDomSpace
   , DomBuilderTimelineE es ~ t
   , DomBuilderE t GhcjsDomSpace :> es
@@ -4697,7 +4433,6 @@ type ImmediateWidgetE (t :: Type) es =
   , HH.Sample t :> es
   , JSM' :> es
   , IOE :> es
-  -- OLD-PERFORMEVENT-COMMENTED-OUT: RPE.Performable equality deleted per task #268 Fork C
   )
 
 -- | Widget monad — newtype wrapper around
@@ -5033,24 +4768,10 @@ instance IOE :> es => MRef.MonadRef (WidgetEff t x es) where
   {-# INLINABLE writeRef #-}
 
 -- ---------------------------------------------------------------------
--- EventWriter / DynamicWriter / BehaviorWriter — NOT provided.
+-- EventWriter, DynamicWriter and BehaviorWriter instances are not supplied
+-- for WidgetEff. Their functional dependencies require the monad type to
+-- determine the output type as well as the timeline.
 --
--- Attempted implementation removed: the reflex writer classes have a
--- functional dependency 'm -> t w' (the monad type uniquely determines
--- both the timeline 't' and the write type 'w'). A bare instance on
--- 'Eff es' can't satisfy the liberal coverage condition because 'es'
--- doesn't encode 't' or 'w' anywhere in its type structure — GHC
--- rejects with [GHC-21572] "Illegal instance declaration ... Reason:
--- lhs type 'Eff es' does not determine rhs types 't', 'w'".
---
--- Path to close this properly: define per-timeline-and-writeshape
--- newtype wrappers (e.g. 'newtype EventWriterEff t w a = EventWriterEff
--- (Eff (State ... : es) a)') so the FunDep is satisfied structurally.
--- Task #122 follow-up. Not exercised by the 14 failing HydrationBrowser
--- tests (they use 'performEvent_', not 'tellEvent').
--- ---------------------------------------------------------------------
-
--- ---------------------------------------------------------------------
 -- Prerender — mirrors the RDPR.Prerender bridge instance for
 -- WithJSContextSingleton x (Eff serverEs) further down in this file,
 -- but for WidgetEff t x es. Client type is a WidgetEff of the client row.
@@ -5145,7 +4866,6 @@ type HydrationWidgetRow t x =
      -- PostBuildT / TriggerEventT / Adjustable layers:
    , HH.PostBuild t
    , HH.TriggerEvent t
--- OLD-ADJUSTABLE-COMMENTED-OUT:    , HH.AdjustableInRequesterT t (R.SI.SpiderHostFrame x) Identity
    , HH.Adjustable t
 
      -- PerformEventT layer:
@@ -5194,9 +4914,6 @@ type FloatingWidgetE es =
   , HH.Adjustable (DomTimeline) :> es
     -- Task #122 fix: expose AdjustableInRequesterT + Requester for
     -- per-cohort fresh Requester scoping in prerender_ client widgets.
--- OLD-ADJUSTABLE-COMMENTED-OUT:   , HH.AdjustableInRequesterT (DomTimeline)
--- OLD-ADJUSTABLE-COMMENTED-OUT:                               (R.SI.SpiderHostFrame R.SI.Global)
--- OLD-ADJUSTABLE-COMMENTED-OUT:                               Identity :> es
   , HH.Requester (DomTimeline)
                  (R.SI.SpiderHostFrame R.SI.Global)
                  Identity :> es
@@ -5205,7 +4922,7 @@ type FloatingWidgetE es =
   , JSM' :> es
   , IOE :> es
   , DomRenderHookE (DomTimeline) :> es
-  -- OLD-PERFORMEVENT-COMMENTED-OUT: RPE.Performable equality deleted per task #268 Fork C
+  , HH.PerformableForRow es ~ RH.HostFrame DomTimeline
   )
 
 -- =====================================================================
@@ -5264,73 +4981,10 @@ newEventWithTriggerRef = do
     pure (writeIORef rt Nothing)
   pure (R.SI.SpiderEvent e, rt)
 
-{- BEGIN OLD-PERFORMEVENT-COMMENTED-OUT hostPerformEventT (fused-runner-based, superseded).
-Task #268 (2026-09-01): OLD body called 'HH.runPerformEventAndAdjustable' — the fused
-Adjustable+PerformEvent+Requester runner — which is now commented out in eff-reflex per
-task #268. NEW body below uses compositional peels 'runRequester . runPerformEventEff .
-runAdjustable . withAdjustableRequester' per user Fork D "easy swap". If per-cohort routing
-regressions surface (Task #122 territory), reconstitute the fused runner atop
-PerformEventEff. Preserved verbatim.
 
--- | OLD: fused-runner-based hostPerformEventT.
--- LEFT INTACT. New AdjustableE-based sibling 'hostPerformEventTAE'
--- lives below.
-hostPerformEventT
-  :: forall a
-   . Eff ( HH.Adjustable (DomTimeline)
-         ': HH.PerformEvent R.SI.Global
-         ': HH.Requester
-             (DomTimeline)
-             (R.SI.SpiderHostFrame R.SI.Global)
-             Identity
-         ': HH.BaseEffectfulHostRow R.SI.Global
-         )
-        a
-  -> HH.EffectfulHost R.SI.Global (a, FireCommand)
-hostPerformEventT act = HH.EffectfulHost $ do
-  (responseEv, respTrigRef) <- liftIO newEventWithTriggerRef
-  (result, aggActions) <-
-      HH.runPerformEventAndAdjustable @R.SI.Global responseEv
-    . RHAI.withAdjustableRequester
-        @R.SI.Global
-        @(R.SI.SpiderHostFrame R.SI.Global)
-        @Identity
-    $ act
-  actionsHandle  <- HH.subscribeEventE @(DomTimeline) aggActions
-  shutdownHandle <- HH.subscribeEventE @(DomTimeline)
-                      (R.never :: R.Event (DomTimeline) ())
-  let fc = FireCommand $ \fires ->
-        void $ HH.fireAndDrain @R.SI.Global
-                 fires actionsHandle shutdownHandle respTrigRef
-  pure (result, fc)
-
-END OLD-PERFORMEVENT-COMMENTED-OUT hostPerformEventT -}
-
--- | Task #275 wave landed (2026-09-02): swapped the split-peels chain
--- ('runRequester . runPerformEventEff . runAdjustable . withAdjustableRequester'
--- — the SeqForkUnlift + IORef shortcut) for the upstream-verbatim fused
--- runner 'runPerformEventAndAdjustableM' (Multi + fanInt + selectInt +
--- switchPromptlyDyn + holdDyn cohort machinery — task #273 restored this
--- for eff-reflex's 'runHeadlessAppM', byte-for-byte with upstream
--- 'runWithReplaceRequesterTWith').
---
--- 'PerformEventEff [IOE]' stays in the row (6 sites in DomHost body still
--- send it: 1374, 1791, 1799, 9039, 9041, 9045) — discharged via
--- 'interpretPerformEventEffAsRequester', which routes PEE callbacks to the
--- ambient Requester scope instead of installing its own. Both PEE and PEM
--- callback streams reach the shared 'responseEv' via that Requester scope.
---
--- 'PerformEventH' stays peeled at the widget-composer level (line 6420,
--- 6510, 6814, 7380) — the higher-order effect where callback monad = ambient
--- monad. hostPerformEventT sees the OUTER row post-PEH-peel.
---
--- Discharge chain (right-to-left, applied to 'act'):
---   1. 'interpretPerformEventEffAsRequester' peels PEE from the row top,
---      routes callbacks to the ambient Requester (which
---      'runPerformEventAndAdjustableM' has NOT yet peeled — Requester is
---      still in the row underneath).
---   2. 'runPerformEventAndAdjustableM' peels Adj + PEM + Req together, per-
---      cohort request routing via 'Multi' + 'fanInt' + 'selectInt'.
+-- | Route IO callbacks through the shared Requester and interpret
+-- PerformEvent, Adjustable and Requester together. The fused handler keeps
+-- replacement cohorts connected to their own response selectors.
 hostPerformEventT
   :: forall a
    . Eff ( HH.PerformEventEff '[IOE] (DomTimeline)
@@ -5360,86 +5014,7 @@ hostPerformEventT act = HH.EffectfulHost $ do
                  fires actionsHandle shutdownHandle respTrigRef
   pure (result, fc)
 
--- | NEW: AdjustableE-based hostPerformEventTAE using 'runAdjustableEStandalone'.
--- Parallel to OLD 'hostPerformEventT' above. Does NOT replace it; the
--- OLD one stays in place. Widget code that routes via AdjustableE
--- uses this composer instead.
---
--- Widget's row shape (top-of-row, discharged by this function):
---   AdjustableE (GuestEff t x) t : BaseEffectfulHostRow x
---
--- NO explicit outer Requester — 'runAdjustableEStandalone' installs one
--- internally (invisible to caller) for cross-cohort bundling.
---
--- runSubWidget composition — option (b) merged Requester + PerformEvent:
---   'runRequester cohortResp . interpretPerformEventAsRequester
---   . runPostBuild postBuild . runTriggerEvent events'
--- Ordering (right-to-left, innermost first):
---   1. runTriggerEvent — peels TriggerEvent (at head of GuestEff)
---   2. runPostBuild — peels PostBuild
---   3. interpretPerformEventAsRequester — peels PerformEvent, routes
---      through ambient Requester (which is still in row at this point)
---   4. runRequester cohortResp — peels Requester, produces per-cohort
---      aggActions (returned as second component of runSubWidget)
---
--- Result: ONE Requester per cohort (sub's) — 'performEvent' and
--- 'requesting' calls both hit it. runAdjustableEStandalone's internal
--- Requester bundles per-cohort aggActions into top-level aggActions.
---
--- 'events' chan is shared with sibling scaffolding; 'postBuild' is the
--- top-level postBuild event.
-{- BEGIN OLD-ADJUSTABLE-COMMENTED-OUT hostPerformEventTAE
-hostPerformEventTAE
-  :: forall a
-   . EventChannel
-  -> R.Event (DomTimeline) ()
-     -- ^ postBuild event (top-level)
-  -> Eff ( HH.AdjustableE
-             (GuestEff (DomTimeline) R.SI.Global)
-             (DomTimeline)
-         ': HH.BaseEffectfulHostRow R.SI.Global
-         )
-        a
-  -> HH.EffectfulHost R.SI.Global (a, FireCommand)
-hostPerformEventTAE events postBuild act = HH.EffectfulHost $ do
-  (responseEv, respTrigRef) <- liftIO newEventWithTriggerRef
-  let runSubWidget
-        :: forall y. R.Event (DomTimeline) (HH.RequesterData Identity)
-        -> Eff (GuestEff (DomTimeline) R.SI.Global) y
-        -> Eff (HH.BaseEffectfulHostRow R.SI.Global)
-               (y, R.Event (DomTimeline)
-                     (HH.RequesterData (R.SI.SpiderHostFrame R.SI.Global)))
-      runSubWidget cohortResp action =
-        -- runRequester peels Requester at position 4 (last widget effect),
-        -- returns (y, cohortAggActions). Discharge chain:
-        HH.runRequester @(DomTimeline) @(R.SI.SpiderHostFrame R.SI.Global) @Identity cohortResp
-          . HH.interpretPerformEventAsRequester @R.SI.Global
-          . HH.runPostBuild postBuild
-          . HH.runTriggerEvent @R.SI.Global events
-          $ action
-  (result, aggActions) <-
-    HH.runAdjustableEStandalone
-      @R.SI.Global
-      @(GuestEff (DomTimeline) R.SI.Global)
-      events responseEv runSubWidget
-      act
-  actionsHandle  <- HH.subscribeEventE @(DomTimeline) aggActions
-  shutdownHandle <- HH.subscribeEventE @(DomTimeline)
-                      (R.never :: R.Event (DomTimeline) ())
-  let fc = FireCommand $ \fires ->
-        void $ HH.fireAndDrain @R.SI.Global
-                 fires actionsHandle shutdownHandle respTrigRef
-  pure (result, fc)
-
--- | Direct analog of upstream reflex-dom-core's
--- @attachImmediateWidget@ (Reflex.Dom.Main:325). The widget-
--- constructor gets the ambient 'HydrationMode' IORef + the shared
--- 'EventChannel', and returns its result plus the postBuild trigger
--- IORef (populated when someone subscribes to the postBuild event).
---
--- The BODY is line-for-line the upstream body, module the outer
--- @runEffectfulHost@ (upstream: @runDomHost@).
--} -- END OLD-ADJUSTABLE-COMMENTED-OUT hostPerformEventTAE
+-- | Build an immediate widget, fire postBuild, and start its event loop.
 attachImmediateWidget
   :: forall a
    . ( IORef HydrationMode
@@ -5479,7 +5054,7 @@ attachImmediateWidget w = do
     _ <- liftIO $ forkIO $ processAsyncEvents events fc
     pure (result, fc)
 
--- | NEW parallel to 'attachImmediateWidget' using the AdjustableE
+-- | Parallel to 'attachImmediateWidget' using the AdjustableE
 -- machinery. Uses 'hostPerformEventTAE' + 'runAdjustableEStandalone'.
 -- Does NOT modify 'attachImmediateWidget' above.
 --
@@ -5492,35 +5067,6 @@ attachImmediateWidget w = do
 -- passed to 'hostPerformEventTAE'. After runEffectfulHost setup, we
 -- read the pb triggerRef (populated when someone subscribes to pb
 -- inside a cohort) and fire it.
-{- BEGIN OLD-ADJUSTABLE-COMMENTED-OUT attachImmediateWidgetAE
-attachImmediateWidgetAE
-  :: forall a
-   . ( IORef HydrationMode
-      -> EventChannel
-      -> Eff ( HH.AdjustableE
-                 (GuestEff (DomTimeline) R.SI.Global)
-                 (DomTimeline)
-             ': HH.BaseEffectfulHostRow R.SI.Global
-             )
-            a
-     )
-  -> IO (a, FireCommand)
-attachImmediateWidgetAE w = do
-  hydrationMode <- newIORef HydrationMode_Immediate
-  events        <- newChan
-  HH.runEffectfulHost $ do
-    -- Top-level postBuild event + trigger. Composer-owned.
-    (postBuild, postBuildTriggerRef) <- liftIO newEventWithTriggerRef
-    (result, fc@(FireCommand fire)) <-
-      hostPerformEventTAE events postBuild (w hydrationMode events)
-    mPostBuildTrigger <- liftIO (readIORef postBuildTriggerRef)
-    liftIO $ forM_ mPostBuildTrigger $ \postBuildTrigger ->
-      fire [postBuildTrigger :=> Identity ()]
-    -- Fork drain INSIDE runEffectfulHost's scope (Option 3 pattern —
-    -- same as attachImmediateWidget).
-    _ <- liftIO $ forkIO $ processAsyncEvents events fc
-    pure (result, fc)
--} -- END OLD-ADJUSTABLE-COMMENTED-OUT attachImmediateWidgetAE
 
 -- | Direct analog of upstream reflex-dom-core's @processAsyncEvents@
 -- (Reflex.Dom.Main:334). Consumes 'TriggerInvocation's off the shared
@@ -5649,9 +5195,7 @@ runApp' app = withDomHost $
 -- Tier 2 additions).
 -- =====================================================================
 
--- Note: 'runDomHost' was already defined in Pass 1 (leaf) — the name
--- matches upstream's convention and the shape is identical to
--- 'HH.runEffectfulHost'. It's exported above.
+-- 'runDomHost' uses the same hosting shape as 'HH.runEffectfulHost'.
 
 -- ---------------------------------------------------------------------
 -- Tier 1: trivial immediate-mode variants
@@ -5697,84 +5241,6 @@ mainWidgetInElementById eid w = withDomHost $
     attachWidget root jsSing w
 
 -- ---------------------------------------------------------------------
--- AdjustableE composer variants (Phase 4).
---
--- Parallel to 'attachWidget'' / 'mainWidget' / etc. but route through
--- 'attachImmediateWidgetAE' + 'hostPerformEventTAE'. Widget code writes
--- against 'Eff (WidgetRowE t x)'.
--- ---------------------------------------------------------------------
-
--- | Analog of 'attachWidget'' using the AdjustableE machinery.
--- Widget row: 'WidgetRowE t x' — includes Reader HydrationEnv +
--- DomRenderHookE + JSM' at head (widget-scoped scaffolding), then
--- AdjustableE (GuestEff t x) t + BaseEffectfulHostRow x.
---
--- Discharge chain (right-to-left, peels effect at head each step):
---   runReader hEnv        -- peels Reader HydrationEnv
---   . runDomRenderHook    -- peels DomRenderHookE
---   . runJSM' ctx         -- peels JSM'
---   -- Now row is: AdjustableE (GuestEff t x) t : Base
---   -- Handed to attachImmediateWidgetAE (which uses hostPerformEventTAE)
---
--- NOTE: does NOT yet include DomBuilder/HasDocument in the widget row.
--- Widget code can do FRP things (postBuild, performEvent, runWithReplace)
--- but cannot render DOM. Phase 5 folds DomBuilder into GuestEff.
-{- BEGIN OLD-ADJUSTABLE-COMMENTED-OUT AE-widget-attach family
-attachWidgetAE'
-  :: forall e x.
-     DOM.IsElement e
-  => e
-  -> JSContextSingleton x
-  -> ( Eff (WidgetRowE (DomTimeline) R.SI.Global) ()
-     )
-  -> JSM ((), FireCommand)
-attachWidgetAE' rootElement _jsSing w = do
-  ctx <- JSaddle.askJSM
-  doc <- Node.getOwnerDocumentUnchecked rootElement
-  df  <- Document.createDocumentFragment doc
-  (a, fc) <- liftIO . attachImmediateWidgetAE $ \hydrationMode events -> do
-    unreadyChildren <- liftIO $ newIORef 0
-    delayed <- liftIO $ newIORef
-                 (RunnerAction (pure ()) :: DelayedHydration (DomTimeline))
-    let hEnv = HydrationEnv
-          { hydrationEnv_document        = toDocument doc
-          , hydrationEnv_parent          = Left (toNode df)
-          , hydrationEnv_unreadyChildren = unreadyChildren
-          , hydrationEnv_commitAction    = pure ()
-          , hydrationEnv_hydrationMode   = hydrationMode
-          , hydrationEnv_switchover      = R.never
-          , hydrationEnv_delayed         = delayed
-          , hydrationEnv_events          = events
-          }
-      -- Discharge chain: peel widget-scoped effects from head, leaving
-      -- 'AdjustableE : Base' for attachImmediateWidgetAE's expected row.
-      -- Right-to-left composition.
-      -- NOTE: DomRenderHook deferred (Phase 5) — needs PerformEvent+TriggerEvent
-      -- in ambient which are in GuestEff (sub), not at outer.
-    runJSM' ctx
-      . runReader hEnv
-      $ w
-  liftIO $ runJSM (replaceElementContents rootElement df) ctx
-  pure (a, fc)
-
--- | Analog of 'attachWidget' using AdjustableE — drops FireCommand.
-attachWidgetAE
-  :: forall e x.
-     DOM.IsElement e
-  => e
-  -> JSContextSingleton x
-  -> Eff (WidgetRowE (DomTimeline) R.SI.Global) ()
-  -> JSM ()
-attachWidgetAE rootElement jsSing w = fst <$> attachWidgetAE' rootElement jsSing w
-
--- | Analog of 'mainWidget' using AdjustableE.
-mainWidgetAE :: (forall x. Eff (WidgetRowE (DomTimeline) R.SI.Global) ()) -> IO ()
-mainWidgetAE w = withDomHost $
-  withJSContextSingleton $ \jsSing -> do
-    doc  <- GHCJS.DOM.currentDocumentUnchecked
-    body <- getBodyUnchecked doc
-    attachWidgetAE body jsSing w
--} -- END OLD-ADJUSTABLE-COMMENTED-OUT AE-widget-attach family
 
 -- | Analog of upstream's @mainWidgetWithCss@ (Reflex.Dom.Main:141).
 -- Prepend a @<style>@ block to @<head>@ with the given CSS bytes,
@@ -5981,7 +5447,7 @@ instance
 -- | Base capability bundle a prerender's server or client widget needs.
 --
 -- 'HH.PerformEventH t' is included so that the MTL bridge instance
--- @RPE.PerformEvent t (Eff es)@ (task #274) resolves inside prerender
+-- @RPE.PerformEvent t (Eff es)@ resolves inside prerender
 -- client branches — meaning upstream reflex-dom bodies that use
 -- @performEvent_@ (e.g. 'scrollToTop' from @Obelisk.Route.Frontend@)
 -- port over VERBATIM into the effectful layer with only the signature
@@ -6374,9 +5840,6 @@ type HydrationWidgetE es =
     -- Task #122 fix: AdjustableInRequesterT + Requester expose the
     -- per-cohort fresh Requester scoping needed by 'runWithReplace' in
     -- 'prerender_' client widgets at hydration switchover.
--- OLD-ADJUSTABLE-COMMENTED-OUT:   , HH.AdjustableInRequesterT (DomTimeline)
--- OLD-ADJUSTABLE-COMMENTED-OUT:                               (R.SI.SpiderHostFrame R.SI.Global)
--- OLD-ADJUSTABLE-COMMENTED-OUT:                               Identity                              :> es
   , HH.Requester (DomTimeline)
                  (R.SI.SpiderHostFrame R.SI.Global)
                  Identity                                            :> es
@@ -6389,7 +5852,7 @@ type HydrationWidgetE es =
     -- 'Performable' associated type reduce to the concrete
     -- @SpiderHostFrame Global@. Required by upstream reflex-dom-core's
     -- 'TestWidget' bundle (which includes @MonadIO (Performable m)@).
-  -- OLD-PERFORMEVENT-COMMENTED-OUT: RPE.Performable equality deleted per task #268 Fork C
+  , HH.PerformableForRow es ~ RH.HostFrame DomTimeline
   )
 
 -- | Widget type used by 'mainHydrationWidget' + 'attachHydrationWidget'.
@@ -6627,108 +6090,6 @@ attachHydrationWidget
   -> JSM ((), FireCommand)
 attachHydrationWidget = attachHydrationWidgetWithFailure @x (pure ())
 
-{- COMMENTED OUT 2026-08-31 — withAttachHydrationWidgetWithFailureAE has
-   4 intentional missing-handler errors (documented in Phase 6 blurb).
-   Blocks reflex-dom-core-effectful library build. Preserved in a block
-   comment; superseded by Reflex.Effectful.DomHostInterpose.
-
--- =====================================================================
--- AdjustableE-routed hydration composer.
---
--- Parallel to 'withAttachHydrationWidgetWithFailure' above. Uses
--- 'hostPerformEventTAE' (which installs 'runAdjustableEStandalone')
--- instead of 'hostPerformEventT' (OLD fused runner).
---
--- Widget-row expected by 'hostPerformEventTAE':
---   AdjustableE (GuestEff t x) t : BaseEffectfulHostRow x
---
--- Widget passed here is 'HydrationWidget x es' which currently expects
--- OLD-Adjustable row. That WILL surface a type mismatch: the widget's
--- row includes 'HH.Adjustable t' + 'HH.PerformEvent x' + 'HH.Requester'
--- at outer (per WidgetE bundle), but the AE composer's row has
--- 'AdjustableE' at head with those in the SUB row (GuestEff).
---
--- The type error surfaces the next migration boundary:
---   * Either 'HydrationWidgetAE' — a new widget row without OLD
---     Adjustable at outer.
---   * Or a bridge — wrap widget so its OLD Adjustable calls route to
---     the AE stack (requires the WidgetEffAE MTL bridge that has the
---     row-bridge issue).
--- =====================================================================
-
-withAttachHydrationWidgetWithFailureAE
-  :: forall (x :: Type) e b. DOM.IsElement e
-  => IO ()          -- ^ 'onFailure' — fires when hydration diverges from pre-rendered DOM.
-  -> JSM ()         -- ^ 'switchoverAction' — JSM fired once at switchover.
-  -> e              -- ^ Existing pre-rendered element (widget adopts + walks it).
-  -> (forall es. HydrationWidget x es)
-  -> (EventChannel -> FireCommand -> JSM b)
-     -- ^ Continuation. Same shape as OLD variant.
-  -> JSM b
-withAttachHydrationWidgetWithFailureAE onFailure switchoverAction rootElement w callback =
-  withJSContextSingleton $ \(jsSingFresh :: JSContextSingleton xFresh) -> do
-  let jsSing = unsafeCoerce jsSingFresh :: JSContextSingleton x
-  ctx <- JSaddle.askJSM
-  doc <- Node.getOwnerDocumentUnchecked rootElement
-  liftIO $ do
-    hydrationMode <- newIORef HydrationMode_Hydrating
-    events        <- newChan
-    HH.runEffectfulHost $ do
-      -- Composer-owned postBuild — AE composer takes it as argument.
-      (postBuild, postBuildTriggerRef) <- liftIO newEventWithTriggerRef
-      ((_, syncTriggerRef), fc@(FireCommand fire)) <-
-        hostPerformEventTAE events postBuild $ do
-          (syncEv,   syncTriggerRef)       <- liftIO newEventWithTriggerRef
-          unreadyChildren <- liftIO $ newIORef 0
-          delayed <- liftIO $ newIORef
-                       (RunnerAction (pure ()) :: DelayedHydration (DomTimeline))
-          let hEnv = HydrationEnv
-                { hydrationEnv_document        = toDocument doc
-                , hydrationEnv_parent          = Left (toNode rootElement)
-                , hydrationEnv_unreadyChildren = unreadyChildren
-                , hydrationEnv_commitAction    = pure ()
-                , hydrationEnv_hydrationMode   = hydrationMode
-                , hydrationEnv_switchover      = syncEv
-                , hydrationEnv_delayed         = delayed
-                , hydrationEnv_events          = events
-                }
-          -- NOTE: widget row bridge — 'w' is a 'HydrationWidget' which
-          -- expects OLD widget row (Adjustable + PerformEvent + Requester
-          -- at outer). AE composer's row has AdjustableE at head. Type
-          -- mismatch expected; surfaces the next gap.
-          _ <-   HH.runTriggerEvent @R.SI.Global events
-               . HH.runPostBuild postBuild
-               . runReader hEnv
-               . runJSM' ctx
-               . runDomRenderHook @R.SI.Global
-               . runHasDocumentHydration @(DomTimeline)
-               . runDomBuilderHydration @(DomTimeline)
-              . HH.runPerformEventH @(DomTimeline)
-               $ runWidgetEff w jsSing
-          let delayedAction = do
-                runner <- liftIO (readIORef delayed)
-                HH.runTriggerEvent @R.SI.Global events
-                  . HH.runPostBuild
-                      (R.never :: R.Event (DomTimeline) ())
-                  . runReader hEnv
-                  . runJSM' ctx
-                  . runDomRenderHook @R.SI.Global
-                  $ runHydrationRunnerWithFailure @(DomTimeline)
-                      runner onFailure Nothing (toNode rootElement)
-                liftIO $ writeIORef hydrationMode HydrationMode_Immediate
-                liftIO $ runJSM switchoverAction ctx
-          _ <- HH.runWithReplaceE @(DomTimeline)
-                 (pure ()) (delayedAction <$ syncEv)
-          pure ((), syncTriggerRef)
-      -- Fire postBuild synchronously (own frame).
-      mPBT <- liftIO (readIORef postBuildTriggerRef)
-      liftIO $ forM_ mPBT $ \t -> fire [t :=> Identity ()]
-      -- Fire syncEvent ASYNCHRONOUSLY via events chan.
-      liftIO $ writeChan events
-        [HH.EventTriggerRef syncTriggerRef :=> HH.TriggerInvocation () (pure ())]
-      liftIO $ runJSM (callback events fc) ctx
-
--} -- end COMMENTED OUT withAttachHydrationWidgetWithFailureAE
 
 -- ---------------------------------------------------------------------
 -- User-facing mainHydrationWidget* variants
@@ -6972,6 +6333,7 @@ data StaticDomBuilderEnv t = StaticDomBuilderEnv
   { _staticDomBuilderEnv_shouldEscape         :: !Bool
   , _staticDomBuilderEnv_selectValue          :: !(Maybe (R.Behavior t Text))
   , _staticDomBuilderEnv_nextRunWithReplaceKey :: !(IORef Int)
+  , _staticDomBuilderEnv_postBuild             :: !(R.Event t ())
   }
 
 -- StaticDomSpace / StaticDomEvent / StaticDomHandler / StaticEventSpec
@@ -7392,6 +6754,7 @@ renderStatic
   :: (forall es
        . ( DomBuilderE StaticDomTimeline StaticDomSpace :> es
          , HasDocumentE StaticDomSpace :> es
+         , HasDocumentSpace es ~ StaticDomSpace
          , HH.Hold StaticDomTimeline :> es
          , HH.Sample StaticDomTimeline :> es
          , HH.CreateTrigger StaticDomTimeline :> es
@@ -7404,31 +6767,26 @@ renderStatic
              StaticDomTimeline
              (R.SI.SpiderHostFrame R.SI.Global)
              Identity :> es
--- OLD-ADJUSTABLE-COMMENTED-OUT:          , HH.AdjustableInRequesterT
--- OLD-ADJUSTABLE-COMMENTED-OUT:              StaticDomTimeline
--- OLD-ADJUSTABLE-COMMENTED-OUT:              (R.SI.SpiderHostFrame R.SI.Global)
--- OLD-ADJUSTABLE-COMMENTED-OUT:              Identity :> es
          , Reader (StaticDomBuilderEnv StaticDomTimeline) :> es
          , State [R.Behavior StaticDomTimeline Builder] :> es
          , IOE :> es
          , Effectful.Prim.Prim :> es
          , DomBuilderTimelineE es ~ StaticDomTimeline
          , DomBuilderSpaceE    es ~ StaticDomSpace
-         -- OLD-PERFORMEVENT-COMMENTED-OUT: RPE.Performable equality deleted per task #268 Fork C
+         , HH.PerformableForRow es ~ RH.HostFrame StaticDomTimeline
          ) => Eff es a)
   -> IO (a, ByteString)
 renderStatic widget = do
   nextKey <- newIORef 0
-  let env0 :: StaticDomBuilderEnv StaticDomTimeline
-      env0 = StaticDomBuilderEnv True Nothing nextKey
   HH.runEffectfulHost . HH.EffectfulHost $ do
     (postBuild, postBuildTriggerRef) <- liftIO newEventWithTriggerRef
+    let env0 = StaticDomBuilderEnv True Nothing nextKey postBuild
     ((r, bsBhv), FireCommand fire) <- HH.unEffectfulHost . hostPerformEventT $
-        HH.runPostBuild postBuild
-      . runTriggerEventStatic @StaticDomTimeline
+        runTriggerEventStatic @StaticDomTimeline
       . runNotReadyStatic @StaticDomTimeline
       . runReader env0
       . evalState @[R.Behavior StaticDomTimeline Builder] []
+      . runPostBuildStatic @StaticDomTimeline
       . runAdjustableStatic @StaticDomTimeline
       . runHasDocumentStatic
       . runDomBuilderStatic @StaticDomTimeline
@@ -7482,6 +6840,13 @@ runNotReadyStatic = interpret $ \_ -> \case
 -- each cohort. Requires an OUTER @HH.Adjustable t :> es@ handler
 -- (typically eff-reflex's 'HH.runAdjustable') to actually queue the
 -- sub-widget executions.
+-- | Resolve postBuild from the current static widget's environment.
+runPostBuildStatic
+  :: forall t es a. Reader (StaticDomBuilderEnv t) :> es
+  => Eff (HH.PostBuild t : es) a -> Eff es a
+runPostBuildStatic = interpret $ \_ HH.GetPostBuild ->
+  asks @(StaticDomBuilderEnv t) _staticDomBuilderEnv_postBuild
+
 runAdjustableStatic
   :: forall t es a
    . ( t ~ StaticDomTimeline
@@ -7496,29 +6861,43 @@ runAdjustableStatic
      )
   => Eff (HH.Adjustable t : es) a
   -> Eff es a
+-- Replacement children run after the initial interpreter scope returns.
+-- Lend the byte accumulator before cloning, so child writes and collection
+-- use the same storage; collecting outside the clone would lose those bytes.
 runAdjustableStatic = interpret $ \env -> \case
   HH.RunWithReplace a0 a' ->
-    localSeqUnlift env $ \unlift ->
-      runWithReplaceStatic @t (unlift a0) (fmap unlift a')
+    localUnlift env SeqForkUnlift $ \unlift ->
+    localLend @'[State [R.Behavior t Builder], Reader (StaticDomBuilderEnv t)] env SeqForkUnlift $ \lend ->
+      runWithReplaceStatic @t
+        (\postBuild child -> unlift $ lend $
+          local @(StaticDomBuilderEnv t)
+            (\e -> e { _staticDomBuilderEnv_postBuild = postBuild }) $
+          runChildBytesStatic @t $ raise $ raise child) a0 a'
   HH.TraverseIntMapWithKeyWithAdjustOp f im0 im' ->
-    localSeqUnlift env $ \unlift ->
+    localUnlift env SeqForkUnlift $ \unlift ->
+    localLend @'[State [R.Behavior t Builder], Reader (StaticDomBuilderEnv t)] env SeqForkUnlift $ \lend ->
       hoistIntMapWithKeyWithAdjustStatic @t
+        (\child -> unlift $ lend $ runChildBytesStatic @t $ raise $ raise child)
         RA.traverseIntMapWithKeyWithAdjust
-        (\k v -> unlift (f k v))
+        f
         im0 im'
   HH.TraverseDMapWithKeyWithAdjustOp f dm0 dm' ->
-    localSeqUnlift env $ \unlift ->
+    localUnlift env SeqForkUnlift $ \unlift ->
+    localLend @'[State [R.Behavior t Builder], Reader (StaticDomBuilderEnv t)] env SeqForkUnlift $ \lend ->
       hoistDMapWithKeyWithAdjustStatic @t
+        (\child -> unlift $ lend $ runChildBytesStatic @t $ raise $ raise child)
         RA.traverseDMapWithKeyWithAdjust
         mapPatchDMap
-        (\k v -> unlift (f k v))
+        f
         dm0 dm'
   HH.TraverseDMapWithKeyWithAdjustWithMoveOp f dm0 dm' ->
-    localSeqUnlift env $ \unlift ->
+    localUnlift env SeqForkUnlift $ \unlift ->
+    localLend @'[State [R.Behavior t Builder], Reader (StaticDomBuilderEnv t)] env SeqForkUnlift $ \lend ->
       hoistDMapWithKeyWithAdjustStatic @t
+        (\child -> unlift $ lend $ runChildBytesStatic @t $ raise $ raise child)
         RA.traverseDMapWithKeyWithAdjustWithMove
         mapPatchDMapWithMove
-        (\k v -> unlift (f k v))
+        f
         dm0 dm'
 {-# INLINABLE runAdjustableStatic #-}
 
@@ -7527,7 +6906,7 @@ runAdjustableStatic = interpret $ \env -> \case
 -- fresh byte-accumulator scope, hold the per-cohort byte behavior,
 -- push @join o@ onto the outer accumulator, emit @replace-end@.
 runWithReplaceStatic
-  :: forall t es a b
+  :: forall t es localEs a b
    . ( t ~ StaticDomTimeline
      , Reader (StaticDomBuilderEnv t) :> es
      , State [R.Behavior t Builder] :> es
@@ -7537,15 +6916,18 @@ runWithReplaceStatic
      , HH.Adjustable t :> es
      , IOE :> es
      )
-  => Eff es a
-  -> R.Event t (Eff es b)
+  => (forall c. R.Event t () -> Eff localEs c -> Eff es (c, R.Behavior t Builder))
+  -> Eff localEs a
+  -> R.Event t (Eff localEs b)
   -> Eff es (a, R.Event t b)
-runWithReplaceStatic a0 a' = do
+runWithReplaceStatic collect a0 a' = do
   e <- ask @(StaticDomBuilderEnv t)
   key <- replaceStartStatic @t e
-  (result0, result') <- HH.runWithReplaceE @t
-    (runChildBytesStatic @t a0)
-    (fmap (runChildBytesStatic @t) a')
+  rec (result0, result') <- HH.runWithReplaceE @t
+        (collect (_staticDomBuilderEnv_postBuild e) a0)
+        (fmap (\child -> do
+          postBuild <- R.headE (() <$ result')
+          collect postBuild child) a')
   o <- R.hold (P.snd result0) (R.fmapCheap P.snd result')
   modify @[R.Behavior t Builder] (Monad.join o :)
   replaceEndStatic @t key
@@ -7556,7 +6938,7 @@ runWithReplaceStatic a0 a' = do
 -- 'runChildBytesStatic'; holds the incremental of byte-behaviors and
 -- pushes a @pull@-computed byte concatenation onto the outer accumulator.
 hoistIntMapWithKeyWithAdjustStatic
-  :: forall t p a b es
+  :: forall t p a b es localEs
    . ( t ~ StaticDomTimeline
      , Reader (StaticDomBuilderEnv t) :> es
      , State [R.Behavior t Builder] :> es
@@ -7567,18 +6949,19 @@ hoistIntMapWithKeyWithAdjustStatic
      , Patch (p (R.Behavior t Builder))
      , PatchTarget (p (R.Behavior t Builder)) ~ IntMap (R.Behavior t Builder)
      )
-  => (   (IntMap.Key -> a -> Eff es (b, R.Behavior t Builder))
+  => (forall c. Eff localEs c -> Eff es (c, R.Behavior t Builder))
+  -> (   (IntMap.Key -> a -> Eff es (b, R.Behavior t Builder))
       -> IntMap a
       -> R.Event t (p a)
       -> Eff es (IntMap (b, R.Behavior t Builder), R.Event t (p (b, R.Behavior t Builder)))
      )
-  -> (IntMap.Key -> a -> Eff es b)
+  -> (IntMap.Key -> a -> Eff localEs b)
   -> IntMap a
   -> R.Event t (p a)
   -> Eff es (IntMap b, R.Event t (p b))
-hoistIntMapWithKeyWithAdjustStatic base f im0 im' = do
+hoistIntMapWithKeyWithAdjustStatic collect base f im0 im' = do
   (children0, children') <- base
-    (\k v -> runChildBytesStatic @t (f k v))
+    (\k v -> collect (f k v))
     im0 im'
   let result0 = IntMap.map P.fst children0
       result' = (fmap . fmap) P.fst children'
@@ -7598,7 +6981,7 @@ hoistIntMapWithKeyWithAdjustStatic base f im0 im' = do
 -- byte-behaviors and pushes a @pull@-computed byte concatenation onto
 -- the outer accumulator.
 hoistDMapWithKeyWithAdjustStatic
-  :: forall t k1 (k :: k1 -> Type) (v :: k1 -> Type) (v' :: k1 -> Type) (p :: (k1 -> Type) -> (k1 -> Type) -> Type) es
+  :: forall t k1 (k :: k1 -> Type) (v :: k1 -> Type) (v' :: k1 -> Type) (p :: (k1 -> Type) -> (k1 -> Type) -> Type) es localEs
    . ( t ~ StaticDomTimeline
      , GCompare k
      , Reader (StaticDomBuilderEnv t) :> es
@@ -7610,7 +6993,8 @@ hoistDMapWithKeyWithAdjustStatic
          ~ DMap k (Constant (R.Behavior t Builder))
      , Patch (p k (Constant (R.Behavior t Builder)))
      )
-  => ( forall (vv :: k1 -> Type) (vv' :: k1 -> Type)
+  => (forall c. Eff localEs c -> Eff es (c, R.Behavior t Builder))
+  -> ( forall (vv :: k1 -> Type) (vv' :: k1 -> Type)
        . GCompare k
        => (forall (x :: k1). k x -> vv x -> Eff es (vv' x))
        -> DMap k vv
@@ -7618,13 +7002,13 @@ hoistDMapWithKeyWithAdjustStatic
        -> Eff es (DMap k vv', R.Event t (p k vv'))
      )
   -> (forall (vv :: k1 -> Type) (vv' :: k1 -> Type). (forall (x :: k1). vv x -> vv' x) -> p k vv -> p k vv')
-  -> (forall (x :: k1). k x -> v x -> Eff es (v' x))
+  -> (forall (x :: k1). k x -> v x -> Eff localEs (v' x))
   -> DMap k v
   -> R.Event t (p k v)
   -> Eff es (DMap k v', R.Event t (p k v'))
-hoistDMapWithKeyWithAdjustStatic base mapPatch f dm0 dm' = do
+hoistDMapWithKeyWithAdjustStatic collect base mapPatch f dm0 dm' = do
   (children0, children') <- base
-    (\k v -> fmap (Compose . swapTuple) (runChildBytesStatic @t (f k v)))
+    (\k v -> fmap (Compose . swapTuple) (collect (f k v)))
     dm0 dm'
   let result0 = DMap.map (P.snd . getCompose) children0
       result' = R.ffor children' $ mapPatch (P.snd . getCompose)
@@ -10414,4 +9798,3 @@ getWheelEvent = do
         2 -> DeltaPage
         _ -> DeltaPixel
     }
-

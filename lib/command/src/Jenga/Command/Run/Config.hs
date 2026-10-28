@@ -30,9 +30,9 @@ import System.Directory (doesFileExist)
 -- | Top-level config read from the Dhall file.
 data JengaRunConfig = JengaRunConfig
   { discoveryDirs :: [FilePath]
-    -- ^ Directories to scan for unpacked thunks whose modules get
-    -- folded into the ghcid repl via @:add *@. Each entry is a
-    -- directory path relative to the invocation cwd; @jenga run@
+    -- ^ Directories to scan for thunk manifests and plugin restart paths.
+    -- Cabal's multi-repl loads the modules with their package settings.
+    -- Each path is relative to the invocation cwd; @jenga run@
     -- enumerates each directory's immediate children and treats
     -- each child as a candidate unpacked thunk.
   , backendPane :: PaneConfig
@@ -41,14 +41,15 @@ data JengaRunConfig = JengaRunConfig
   deriving stock (Show, Eq, Generic)
   deriving anyclass (FromDhall)
 
--- | Per-pane configuration.
+-- | Shared configuration schema. The foreground multi-repl launcher uses
+-- backendPane.onReload; pane targets remain available to other launchers.
 data PaneConfig = PaneConfig
   { target :: Text
     -- ^ cabal repl target (e.g. @"lib:backend"@, @"exe:frontend"@,
     -- @"lib:common"@).
   , onReload :: Maybe Text
     -- ^ Optional GHCi expression to run after each successful reload
-    -- (ghcid @--test=@). @Just ":main"@ to launch the server after
+    -- (ghcid @--run=@). @Just ":main"@ to launch the server after
     -- each green reload.
   }
   deriving stock (Show, Eq, Generic)

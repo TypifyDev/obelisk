@@ -194,6 +194,7 @@ let src = ../.;
 
 in rec {
   inherit src jenga jenga-command-pkg jenga-asset-manifest-generate wasi-shim assets docs serverModule;
+  inherit nix-thunk-cli;
 
   frontendJs = config:
     config.haskell-nix.project.projectCross.ghcjs.hsPkgs.frontend.components.exes.frontend;
