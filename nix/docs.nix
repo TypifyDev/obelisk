@@ -1,12 +1,13 @@
 { system ? builtins.currentSystem
-, pkgs ? import ../deps/nix-haskell/pins/nixpkgs { inherit system; }
+, pkgs ? import ((import ./thunk-source.nix ../thunks/nix-haskell) + "/pins/nixpkgs") { inherit system; }
 }:
 
-let eval = import ../deps/nix-haskell/eval.nix { inherit system pkgs; };
+let nixHaskellSrc = import ./thunk-source.nix ../thunks/nix-haskell;
+    eval = import (nixHaskellSrc + "/eval.nix") { inherit system pkgs; };
 
     options = (eval (import ./module.nix)).options;
 
-in import ../deps/nix-haskell/docs.nix {
+in import (nixHaskellSrc + "/docs.nix") {
   inherit pkgs;
   options = { jenga = options.jenga; };
 }

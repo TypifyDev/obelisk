@@ -26,13 +26,13 @@ source-repository-package
   tag: abc123
 ```
 
-Use `source-repository-packages` in `project.nix` for local packages, nix-thunks, or git submodules:
+Use `source-repository-packages` in `project.nix` for local packages or nix-thunks:
 
 ```nix
 {
   source-repository-packages = {
-    some-local-package = ./deps/some-local-package;
-    some-remote-package = ./deps/some-remote-package;  # nix-thunk or git submodule
+    some-local-package = ./thunks/some-local-package;
+    some-remote-package = ./thunks/some-remote-package;  # nix-thunk
   };
 }
 ```

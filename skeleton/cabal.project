@@ -18,11 +18,11 @@ if !(arch(javascript) || arch(wasm32))
 -- Uncomment to develop jenga libraries and reflex-dom locally.
 -- Not needed for normal development; nix provides these via source-repository-packages.
 --optional-packages:
---  deps/jenga/lib/*
---  deps/jenga/lib/*/*
+--  thunks/jenga/lib/*
+--  thunks/jenga/lib/*/*
 --
 --optional-packages:
---  deps/jenga/deps/reflex-dom/*
+--  thunks/jenga/thunks/reflex-dom/*
 
 multi-repl: True
 -- Re-enabled to investigate the LinkInMemory panic prior turns noted.

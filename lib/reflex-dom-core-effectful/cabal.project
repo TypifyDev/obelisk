@@ -7,7 +7,7 @@
 --   * reflex-dom-core-effectful — this package (variant A)
 --   * reflex                    — from ../eff-reflex/
 --
--- All other lib packages in deps/jenga/lib/ are intentionally excluded.
+-- All other lib packages in thunks/jenga/lib/ are intentionally excluded.
 packages:
   .
   ../eff-reflex

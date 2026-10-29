@@ -2,9 +2,11 @@
 
 let lib = import ./lib.nix { inherit system; };
 
-    nix-haskell = import ../deps/nix-haskell { inherit system; };
+    thunkSource = import ./thunk-source.nix;
+    nixHaskellSrc = thunkSource ../thunks/nix-haskell;
+    nix-haskell = import nixHaskellSrc { inherit system; };
 
-    pkgs = import ../deps/nix-haskell/pins/nixpkgs { inherit system; };
+    pkgs = import (nixHaskellSrc + "/pins/nixpkgs") { inherit system; };
 
     module = import ./module.nix;
 

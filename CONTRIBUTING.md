@@ -96,15 +96,15 @@ Enter the skeleton's nix shell to get a development environment with all Jenga l
 
 ```bash
 cd skeleton
-nix-shell  # or: nix develop 'git+file:.?submodules=1'
+nix-shell  # or: nix develop 'git+file:.'
 ```
 
 From within the shell, uncomment the Jenga `optional-packages` stanzas in `cabal.project` to develop Jenga libraries alongside the skeleton:
 
 ```cabal
 optional-packages:
-  deps/jenga/lib/*
-  deps/jenga/lib/*/*
+  thunks/jenga/lib/*
+  thunks/jenga/lib/*/*
 ```
 
 Then use `ob-run` for live feedback, or `ob-repl` for a REPL:

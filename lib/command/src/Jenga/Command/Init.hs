@@ -55,10 +55,10 @@ run opts = do
   -- Make everything writable (skeleton may come from nix store).
   makeWritableRecursive name
 
-  -- Create deps/jenga symlink to the live Jenga checkout.
+  -- Create thunks/jenga symlink to the live Jenga checkout.
   -- This ensures nix evaluation uses the same derivation hashes as the developer's builds.
-  createDirectoryIfMissing True (name </> "deps")
-  createSymbolicLink jengaRoot (name </> "deps" </> "jenga")
+  createDirectoryIfMissing True (name </> "thunks")
+  createSymbolicLink jengaRoot (name </> "thunks" </> "jenga")
 
   -- Initialize git.
   runProcess gitPath ["-C", name, "init", "-q"]

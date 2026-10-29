@@ -1,21 +1,24 @@
 { system }:
 
 let src = ../.;
+    thunkSource = import ./thunk-source.nix;
+    nixHaskellSrc = thunkSource ../thunks/nix-haskell;
 
     # Filesystem path to the jenga checkout (not a store path).
-    # Used by jenga init to create deps/jenga symlinks in spawned projects.
+    # Used by jenga init to create thunks/jenga symlinks in spawned projects.
     jengaRoot = toString ../.;
 
     # Copy a standalone dep repo to the store, stripping its .git directory.
     # Needed because the nix-haskell source-repository-package builder does
     # `git init && git commit` which fails if .git already exists.
-    depSrc = name: builtins.path {
+    cleanThunkSource = name: path: builtins.path {
       inherit name;
-      path = ../deps + "/${name}";
+      path = thunkSource path;
       filter = p: _: baseNameOf p != ".git";
     };
+    depSrc = name: cleanThunkSource name (../thunks + "/${name}");
 
-    nix-haskell = import ../deps/nix-haskell { inherit system; };
+    nix-haskell = import nixHaskellSrc { inherit system; };
 
     # Standalone project built only to produce the manifest generator executable.
     jenga-asset-manifest = nix-haskell {
@@ -28,10 +31,10 @@ let src = ../.;
 
     # nix-thunk CLI, built with haskell.nix directly using our GHC 9.14 pin.
     # Uses allow-newer for base/template-haskell bounds.
-    haskell-nix-raw = import ../deps/nix-haskell/pins/haskell.nix {};
+    haskell-nix-raw = import (nixHaskellSrc + "/pins/haskell.nix") {};
     haskell-nix-pkgs = import haskell-nix-raw.sources.nixpkgs
       (haskell-nix-raw.nixpkgsArgs // { inherit system; });
-    nix-thunk-src = import ../deps/nix-haskell/deps/nix-thunk/thunk.nix;
+    nix-thunk-src = import (nixHaskellSrc + "/deps/nix-thunk/thunk.nix");
     nix-thunk-project = haskell-nix-pkgs.haskell-nix.project {
       src = haskell-nix-pkgs.haskell-nix.haskellLib.cleanGit {
         name = "nix-thunk";
@@ -76,7 +79,7 @@ let src = ../.;
 
     # Clean skeleton for embedding as Cabal data-files.
     # Strips build artifacts, absolute symlinks (nix-shell leftovers),
-    # and the cyclic deps/jenga -> ../../ link.
+    # and the cyclic thunks/jenga -> ../../ link.
     cleanSkeleton = pkgs.runCommand "clean-skeleton" {} ''
       cp -rP ${src}/skeleton $out
       chmod -R +w $out
@@ -89,8 +92,8 @@ let src = ../.;
         esac
       done
 
-      # Remove cyclic deps/jenga -> ../../ (jenga init creates the proper symlink)
-      rm -f $out/deps/jenga
+      # Remove cyclic thunks/jenga -> ../../ (jenga init creates the proper symlink)
+      rm -f $out/thunks/jenga
 
       # Remove build artifacts that leaked into the source tree
       rm -rf $out/dist-wasm $out/dist-newstyle $out/result $out/ob-run-output.txt
@@ -170,11 +173,11 @@ let src = ../.;
     mkOptionalPackages = { config, lib }:
       lib.filterAttrs (name: _: config.packages ? ${name});
 
-    assets = import ./assets.nix { nixpkgs = (import ../deps/nix-haskell/pins/nixpkgs { inherit system; }); };
+    assets = import ./assets.nix { nixpkgs = (import (nixHaskellSrc + "/pins/nixpkgs") { inherit system; }); };
 
     docs = import ./docs.nix { inherit system; };
 
-    pkgs = import ../deps/nix-haskell/pins/nixpkgs { inherit system; };
+    pkgs = import (nixHaskellSrc + "/pins/nixpkgs") { inherit system; };
 
     serverModule = ./server.nix;
 
@@ -203,6 +206,7 @@ in rec {
     config.haskell-nix.project.projectCross.wasi32.hsPkgs.frontend.components.exes.frontend;
 
   source-repository-packages = {
+    reflex = cleanThunkSource "eff-reflex" ../lib/eff-reflex;
     jenga-asset-manifest = src + "/lib/asset/manifest";
     jenga-asset-serve-snap = src + "/lib/asset/serve-snap";
     jenga-backend = src + "/lib/backend";
@@ -219,8 +223,8 @@ in rec {
     # jenga-auth-frontend — needs ClasshSS, reflex-classhss, staticAssets, templates
     # jenga-auth-frontend = src + "/lib/jenga-auth-frontend";
 
-    obelisk-oauth-common = src + "/deps/obelisk-oauth/common";
-    obelisk-oauth-backend = src + "/deps/obelisk-oauth/backend";
+    obelisk-oauth-common = (depSrc "obelisk-oauth") + "/common";
+    obelisk-oauth-backend = (depSrc "obelisk-oauth") + "/backend";
     lamarckian = src + "/lib/lamarckian";
     lamarckian-core = src + "/lib/lamarckian-core";
     scrappy-core = src + "/lib/scrappy-core";
@@ -240,45 +244,45 @@ in rec {
     };
     servant-jsaddle = depSrc "servant-jsaddle";
 
-    reflex-dom = src + "/deps/reflex-dom/reflex-dom";
-    reflex-dom-core = src + "/deps/reflex-dom/reflex-dom-core";
-    chrome-test-utils = src + "/deps/reflex-dom/chrome-test-utils";
+    reflex-dom = (depSrc "reflex-dom") + "/reflex-dom";
+    reflex-dom-core = (depSrc "reflex-dom") + "/reflex-dom-core";
+    chrome-test-utils = (depSrc "reflex-dom") + "/chrome-test-utils";
 
     haskell-src-exts = haskell-src-exts-patched;
 
     # --- rhyolite ecosystem ---
-    rhyolite-common = src + "/deps/rhyolite/common";
-    rhyolite-backend = src + "/deps/rhyolite/backend";
-    rhyolite-frontend = src + "/deps/rhyolite/frontend";
-    rhyolite-widgets = src + "/deps/rhyolite/widgets";
-    semimap = src + "/deps/rhyolite/semimap";
-    rhyolite-beam-db = src + "/deps/rhyolite/beam/db";
-    rhyolite-beam-orphans = src + "/deps/rhyolite/beam/orphans";
-    rhyolite-beam-task-worker-types = src + "/deps/rhyolite/beam/task/types";
-    rhyolite-beam-task-worker-backend = src + "/deps/rhyolite/beam/task/backend";
-    rhyolite-notify-listen = src + "/deps/rhyolite/notify-listen/notify-listen";
-    rhyolite-notify-listen-beam = src + "/deps/rhyolite/notify-listen/notify-listen-beam";
-    rhyolite-email = src + "/deps/rhyolite/email";
-    mime-mail-orphans = src + "/deps/rhyolite/email/mime-mail-orphans";
-    rhyolite-account-types = src + "/deps/rhyolite/account/types";
-    rhyolite-account-backend = src + "/deps/rhyolite/account/backend";
-    signed-data = src + "/deps/rhyolite/signed-data/signed-data";
-    signed-data-clientsession = src + "/deps/rhyolite/signed-data/signed-data-clientsession";
-    psql-simple-class = src + "/deps/rhyolite/psql-extras/psql-simple-class";
-    psql-simple-beam = src + "/deps/rhyolite/psql-extras/psql-simple-beam";
-    psql-serializable = src + "/deps/rhyolite/psql-extras/psql-serializable";
+    rhyolite-common = (depSrc "rhyolite") + "/common";
+    rhyolite-backend = (depSrc "rhyolite") + "/backend";
+    rhyolite-frontend = (depSrc "rhyolite") + "/frontend";
+    rhyolite-widgets = (depSrc "rhyolite") + "/widgets";
+    semimap = (depSrc "rhyolite") + "/semimap";
+    rhyolite-beam-db = (depSrc "rhyolite") + "/beam/db";
+    rhyolite-beam-orphans = (depSrc "rhyolite") + "/beam/orphans";
+    rhyolite-beam-task-worker-types = (depSrc "rhyolite") + "/beam/task/types";
+    rhyolite-beam-task-worker-backend = (depSrc "rhyolite") + "/beam/task/backend";
+    rhyolite-notify-listen = (depSrc "rhyolite") + "/notify-listen/notify-listen";
+    rhyolite-notify-listen-beam = (depSrc "rhyolite") + "/notify-listen/notify-listen-beam";
+    rhyolite-email = (depSrc "rhyolite") + "/email";
+    mime-mail-orphans = (depSrc "rhyolite") + "/email/mime-mail-orphans";
+    rhyolite-account-types = (depSrc "rhyolite") + "/account/types";
+    rhyolite-account-backend = (depSrc "rhyolite") + "/account/backend";
+    signed-data = (depSrc "rhyolite") + "/signed-data/signed-data";
+    signed-data-clientsession = (depSrc "rhyolite") + "/signed-data/signed-data-clientsession";
+    psql-simple-class = (depSrc "rhyolite") + "/psql-extras/psql-simple-class";
+    psql-simple-beam = (depSrc "rhyolite") + "/psql-extras/psql-simple-beam";
+    psql-serializable = (depSrc "rhyolite") + "/psql-extras/psql-serializable";
 
-    # --- rhyolite dep thunks (cloned into deps/) ---
-    # Standalone repos use depSrc to strip .git; subdirectory refs use src +.
+    # --- rhyolite dep thunks (packed under thunks/) ---
+    # Resolve packed sources before selecting package subdirectories.
     vessel = depSrc "vessel";
-    beam-core = src + "/deps/beam/beam-core";
-    beam-postgres = src + "/deps/beam/beam-postgres";
-    beam-migrate = src + "/deps/beam/beam-migrate";
+    beam-core = (depSrc "beam") + "/beam-core";
+    beam-postgres = (depSrc "beam") + "/beam-postgres";
+    beam-migrate = (depSrc "beam") + "/beam-migrate";
     beam-automigrate = depSrc "beam-automigrate";
-    gargoyle = src + "/deps/gargoyle/gargoyle";
-    gargoyle-postgresql = src + "/deps/gargoyle/gargoyle-postgresql";
-    gargoyle-postgresql-nix = src + "/deps/gargoyle/gargoyle-postgresql-nix";
-    gargoyle-postgresql-connect = src + "/deps/gargoyle/gargoyle-postgresql-connect";
+    gargoyle = (depSrc "gargoyle") + "/gargoyle";
+    gargoyle-postgresql = (depSrc "gargoyle") + "/gargoyle-postgresql";
+    gargoyle-postgresql-nix = (depSrc "gargoyle") + "/gargoyle-postgresql-nix";
+    gargoyle-postgresql-connect = (depSrc "gargoyle") + "/gargoyle-postgresql-connect";
     monoid-map = depSrc "monoid-map";
     bytestring-aeson-orphans = depSrc "bytestring-aeson-orphans";
     postgresql-simple-interpolate = depSrc "postgresql-simple-interpolate";
