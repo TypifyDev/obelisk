@@ -34,6 +34,7 @@ flag profile-reflex
 library
   exposed-modules:
     Reflex.Effectful.DomHost
+    Reflex.Effectful.DomHostInterpose
 
 
   -- MTL modules re-exported from Hackage 'reflex-dom-core' so downstream
