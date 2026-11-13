@@ -5,6 +5,18 @@
 
 let jengaLib = import ./lib.nix { inherit system; };
 
+    cabalSourceEntry = _: entry:
+      let source = if builtins.isAttrs entry && entry ? src then entry.src else entry;
+          condition = if builtins.isAttrs entry then entry.condition or null else null;
+          package = "packages: ${source}\n";
+      in if condition == null then package else "if ${condition}\n  ${package}";
+
+    devCabalSources = pkgs.writeText "jenga-cabal-sources.project"
+      (lib.concatStringsSep "\n"
+        (lib.mapAttrsToList cabalSourceEntry config.source-repository-packages
+          ++ config.extraCabalProject
+          ++ [ "import: ${config.haskell-nix.project.plan-nix.freeze}" ]));
+
     assets = import ./assets.nix { nixpkgs = pkgs; };
 
     # Merge singular path (at root) with named paths (as subdirs).
@@ -57,6 +69,11 @@ in {
   ];
 
   options.jenga = {
+    buildAssets = lib.mkOption {
+      type = lib.types.bool;
+      default = !lib.inNixShell;
+      description = "Build browser and static assets; deployment outputs always enable this.";
+    };
     static = {
       path = lib.mkOption {
         type = lib.types.nullOr (lib.types.either lib.types.path lib.types.package);
@@ -83,7 +100,7 @@ in {
       compressed = lib.mkOption {
         type = lib.types.nullOr lib.types.package;
         # Skip in nix-shell to avoid triggering asset generation.
-        default = if lib.inNixShell then null
+        default = if !config.jenga.buildAssets then null
           else if hashedStatic != null && config.jenga.static.compress
             then assets.mkAssets hashedStatic
             else hashedStatic;
@@ -102,7 +119,7 @@ in {
       package = lib.mkOption {
         type = lib.types.nullOr lib.types.package;
         # Skip in nix-shell to avoid triggering cross-compilation builds.
-        default = if lib.inNixShell then null else jengaLib.frontendJs config;
+        default = if !config.jenga.buildAssets then null else jengaLib.frontendJs config;
         defaultText = lib.literalExpression "jengaLib.frontendJs config";
         description = "GHCJS-compiled frontend derivation.";
       };
@@ -188,7 +205,7 @@ in {
       package = lib.mkOption {
         type = lib.types.nullOr lib.types.package;
         # Skip in nix-shell to avoid triggering cross-compilation builds.
-        default = if lib.inNixShell then null else jengaLib.frontendWasm config;
+        default = if !config.jenga.buildAssets then null else jengaLib.frontendWasm config;
         defaultText = lib.literalExpression "jengaLib.frontendWasm config";
         description = "WASM-compiled frontend derivation.";
       };
@@ -289,6 +306,11 @@ in {
       (jengaLib.staticManifestOverride { static = rawStatic; })
     ];
 
+    # The interactive project includes packed sources too. Include their
+    # declared system libraries and tools in the development environment.
+    shell.packages = lib.mkDefault (ps:
+      builtins.filter (p: p.isLocal or false) (builtins.attrValues ps));
+
     shell.nativeBuildInputs = [
       pkgs.haskellPackages.ghcid
       jengaLib.jenga-command-pkg
@@ -296,6 +318,7 @@ in {
 
     shell.shellHook = ''
       export JENGA_WASI_SHIM="${jengaLib.wasi-shim}"
+      export JENGA_CABAL_SOURCES="${devCabalSources}"
 
       echo ""
       echo "=== jenga ==="

@@ -60,6 +60,8 @@ import qualified Data.Map as Map
 import           Data.Proxy (Proxy(..))
 import           Data.Text (Text)
 import qualified Data.Text as T
+import qualified Data.Text.Encoding as TE
+import qualified Network.HTTP.Types as HTTP
 
 import           Jenga.Route.Core
 
@@ -120,7 +122,7 @@ renderServantBackendRoute = renderRoute @api
 urlToSegments :: Text -> ([Text], Map Text (Maybe Text))
 urlToSegments url =
   let (path, queryPart) = T.breakOn "?" url
-      segments = filter (not . T.null) $ T.splitOn "/" path
+      segments = HTTP.decodePathSegments $ TE.encodeUtf8 path
       queryParams = case T.uncons queryPart of
         Just ('?', qs) -> parseQueryString qs
         _ -> Map.empty
@@ -128,13 +130,7 @@ urlToSegments url =
 
 -- | Parse a query string into key-value pairs.
 parseQueryString :: Text -> Map Text (Maybe Text)
-parseQueryString qs = Map.fromList
-  [ case T.breakOn "=" part of
-      (k, v) | T.null v  -> (k, Nothing)
-              | otherwise -> (k, Just (T.drop 1 v))
-  | part <- T.splitOn "&" qs
-  , not (T.null part)
-  ]
+parseQueryString = Map.fromList . HTTP.parseQueryText . TE.encodeUtf8
 
 -- | Parse path segments into a route using 'decodeRoute'.
 parseUrlSegments :: forall api r. HasRoute api r => Proxy api -> Text -> Maybe r

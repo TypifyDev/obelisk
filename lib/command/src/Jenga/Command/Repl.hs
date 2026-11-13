@@ -7,7 +7,8 @@ import System.IO (hPutStrLn, stderr)
 import System.Posix.Env (setEnv)
 import System.Which (staticWhich)
 
-import Jenga.Command.Utils (devCrossCabalArgs, devGhcOptions, execProcess)
+import Jenga.Command.Cabal (withCabalProject)
+import Jenga.Command.Utils (devCrossCabalArgs, devGhcOptions, runProcessWithEnv)
 
 cabalPath :: FilePath
 cabalPath = $(staticWhich "cabal")
@@ -32,8 +33,10 @@ run rawArgs
             then ["lib:backend", "lib:common", "lib:frontend"]
             else targets
       setEnv "JENGA_CROSS_CABAL_ARGS" devCrossCabalArgs True
-      execProcess cabalPath $
-        ["repl"] <> finalTargets <> ["-O0", "-f", "-cross"] <> devGhcOptions <> extraArgs
+      withCabalProject $ \projectArgs ->
+        runProcessWithEnv cabalPath
+          (["repl"] <> finalTargets <> ["-O0", "-f", "-cross"]
+            <> projectArgs <> devGhcOptions <> extraArgs) []
 
 splitAtDashDash :: [String] -> ([String], [String])
 splitAtDashDash = go []

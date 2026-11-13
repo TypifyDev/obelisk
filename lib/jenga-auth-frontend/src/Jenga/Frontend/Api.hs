@@ -30,7 +30,6 @@ import Control.Applicative (some)
 import Data.Bifunctor
 import Data.Maybe
 import Data.Functor.Identity
-import Data.Functor (void)
 import qualified Data.Map as Map
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as T
@@ -216,7 +215,7 @@ runAPIPostBuild route withPb = do
   evDyn <- RDC.prerender (pure never) $ do
     pb <- RDC.getPostBuild
     let evPayload = withPb pb
-    evXhr <- RDC.performRequestAsync $ withCred . void . postJson routeStr <$> evPayload
+    evXhr <- RDC.performRequestAsync $ withCred . postJson routeStr <$> evPayload
     pure $ decodeXhrAnnotate @(Either (BackendError err) fromJson) routeStr <$> evXhr
   pure $ fanResponse' $ switchDyn evDyn
 
@@ -288,7 +287,7 @@ runAPIResponseGated route evPayload = do
     -- server responds. Mirrors the Eff body's two holdDyn stanzas.
     shouldFire <- holdDyn True $ leftmost [ False <$ evPayload ]
     let evGated = gate (current shouldFire) evPayload
-    evXhr <- RDC.performRequestAsync $ withCred . void . postJson routeStr <$> evGated
+    evXhr <- RDC.performRequestAsync $ withCred . postJson routeStr <$> evGated
     let evDecoded = decodeXhrAnnotate @(Either (BackendError err) fromJson) routeStr <$> evXhr
     let (errEv, resEv) = fanResponse' evDecoded
     _reopened <- holdDyn True $ leftmost
@@ -327,7 +326,7 @@ runAPIWithHeadersMTL route headers evPayload = do
   let routeStr = renderObeliskBackendRoute enc route
   evDyn <- RDC.prerender (pure (never, never)) $ do
     evXhr <- RDC.performRequestAsync $
-      withHeaders headers . withCred . void . postJson routeStr <$> evPayload
+      withHeaders headers . withCred . postJson routeStr <$> evPayload
     let evDecoded = decodeXhrAnnotate @(Either (BackendError err) fromJson) routeStr <$> evXhr
     let (errEv, resEv) = fanResponse' evDecoded
     pure (errEv, resEv)
@@ -428,7 +427,7 @@ performJSONRequestResponse
 performJSONRequestResponse route jsonEv = do
   (enc :: FullRouteEncoder be fe) <- asksM
   let routeStr = renderObeliskBackendRoute enc route
-  evXhrResponse <- RDC.performRequestAsync $ withCred . void . postJson routeStr <$> jsonEv
+  evXhrResponse <- RDC.performRequestAsync $ withCred . postJson routeStr <$> jsonEv
   pure $ decodeXhrResponse' <$> evXhrResponse
 
 decodeXhrAnnotate
@@ -509,7 +508,7 @@ performJSONRequestWithHeaders
   -> Eff es (Event t XhrResponse)
 performJSONRequestWithHeaders route headers jsonEv = do
   let routeText = Link (encodeRoute @api route)
-  performRequestAsync $ withHeaders headers . withCred . void . postJson (getLink routeText) <$> jsonEv
+  performRequestAsync $ withHeaders headers . withCred . postJson (getLink routeText) <$> jsonEv
 
 performJSONRequest
   :: forall api r t es cfg json.
@@ -531,7 +530,7 @@ performJSONRequest
   -> Eff es (Event t XhrResponse)
 performJSONRequest route jsonEv = do
   let routeText = Link (encodeRoute @api route)
-  performRequestAsync $ withCred <$> void . postJson (getLink routeText) <$> jsonEv
+  performRequestAsync $ withCred . postJson (getLink routeText) <$> jsonEv
 
 withCred :: XhrRequest a -> XhrRequest a
 withCred xhr = xhr & xhrRequest_config . xhrRequestConfig_withCredentials .~ True

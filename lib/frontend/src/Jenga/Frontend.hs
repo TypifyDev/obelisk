@@ -36,13 +36,15 @@ module Jenga.Frontend
   , setInitialRoute
   , runFrontend
   , runFrontendWithConfigsAndCurrentRoute
+  , runFrontendWithConfigsAndCurrentRouteJSM
 
   , module Jenga.Frontend.Cookie
   ) where
 
 import           Control.Monad                           (when)
-import           Control.Monad.Fix                       (MonadFix)
 import           Control.Monad.IO.Class                  (MonadIO, liftIO)
+import           Control.Monad.Fix                       (MonadFix)
+import qualified Jenga.ExecutableConfig.Lookup           as ConfigLookup
 import           Data.ByteString                         (ByteString)
 import qualified Data.ByteString.Base64                  as B64
 import           Data.Foldable                           (for_)
@@ -223,12 +225,14 @@ renderFrontendHtml configs cookies urlEnc route frontend headExtra bodyExtra = d
             runRoutedStatic @DH.StaticDomTimeline @r (R.constDyn route) $
               el "html" $ do
                 el "head" $ do
-                  baseTag
+                  DH.runHydratableE @DH.StaticDomTimeline @DH.StaticDomSpace baseTag
                   injectExecutableConfigs configs
-                  renderFrontendPart id FrontendHead frontend
+                  DH.runHydratableE @DH.StaticDomTimeline @DH.StaticDomSpace $
+                    renderFrontendPart id FrontendHead frontend
                   headExtra @_ @DH.StaticDomTimeline
                 el "body" $ do
-                  renderFrontendPart id FrontendBody frontend
+                  DH.runHydratableE @DH.StaticDomTimeline @DH.StaticDomSpace $
+                    renderFrontendPart id FrontendBody frontend
                   bodyExtra @_ @DH.StaticDomTimeline
   pure $ "<!DOCTYPE html>" <> html
 
@@ -238,8 +242,8 @@ renderFrontendHtml configs cookies urlEnc route frontend headExtra bodyExtra = d
 -- with a jenga-namespaced attribute so 'removeHTMLConfigs' can locate
 -- and strip them on hydrate.
 --
--- Widget-side (goes through 'DomBuilderE'), so hydration walks it as
--- part of the head DOM.
+-- Emitted through 'DomBuilderE' during SSR and removed before hydration
+-- walks the frontend's head content.
 injectExecutableConfigs
   :: forall es t
    . ( R.Reflex t
@@ -309,7 +313,10 @@ baseTag =
 -- into the SSR'd @<head>@. Called once during hydration bootstrap so
 -- the runtime doesn't re-observe them as duplicates.
 removeHTMLConfigs :: JSM' :> es => Eff es ()
-removeHTMLConfigs = liftJSM $ do
+removeHTMLConfigs = liftJSM removeHTMLConfigsJSM
+
+removeHTMLConfigsJSM :: JSM ()
+removeHTMLConfigsJSM = do
   mdoc <- DOM.currentDocument
   case mdoc of
     Nothing  -> pure ()
@@ -419,14 +426,13 @@ getLocationUriAuthJSM location = do
 -- | Client-side boot entry — Eff port of upstream
 -- @Obelisk.Frontend.runFrontend@. Composes the effect interpreter stack
 -- (Configs / CookiesEff / Routed / SetRoute / RouteToUrl via
--- 'Routing.runBrowserRoutingWith') around the frontend body and drives
--- 'DH.mainWidget'.
+-- 'Routing.runBrowserRoutingWith') around the frontend head and body.
 --
 -- Signature diverges from upstream in one place: takes an explicit
 -- 'Servant.HasRoute' proxy + fallback route (jenga's routing pattern)
 -- rather than an @Encoder@ + typed obelisk route. Selects the
--- 'FrontendMode' from the current platform (GHCJS = hydrate + no hash;
--- JSaddle-warp = immediate + hash).
+-- 'FrontendMode' from the current platform (browser targets hydrate
+-- without hash routing; native JSaddle uses immediate rendering and hashes).
 runFrontend
   :: forall api r.
      ( Servant.HasRoute api r
@@ -435,22 +441,30 @@ runFrontend
   -> r                        -- ^ Fallback route for unrecognized URLs
   -> Frontend r
   -> IO ()
-runFrontend proxy fallback frontend = do
+runFrontend proxy fallback frontend = DH.withDomHost $ do
   let mode = FrontendMode
         { _frontendMode_hydrate =
-#ifdef ghcjs_HOST_OS
+#if defined(ghcjs_HOST_OS) || defined(javascript_HOST_ARCH) || defined(wasm32_HOST_ARCH)
             True
 #else
             False
 #endif
         , _frontendMode_adjustRoute =
-#ifdef ghcjs_HOST_OS
+#if defined(ghcjs_HOST_OS) || defined(javascript_HOST_ARCH) || defined(wasm32_HOST_ARCH)
             False
 #else
             True
 #endif
         }
-  runFrontendWithConfigsAndCurrentRoute mode Map.empty proxy fallback frontend
+  configs <- loadFrontendConfigs
+  runFrontendWithConfigsAndCurrentRouteJSM mode configs proxy fallback frontend
+
+loadFrontendConfigs :: JSM (Map Text ByteString)
+#if defined(ghcjs_HOST_OS) || defined(javascript_HOST_ARCH) || defined(wasm32_HOST_ARCH)
+loadFrontendConfigs = ConfigLookup.getConfigs
+#else
+loadFrontendConfigs = liftIO ConfigLookup.getConfigs
+#endif
 
 -- | Like 'runFrontend' but takes an explicit 'FrontendMode' and
 -- pre-loaded config map. Eff port of upstream
@@ -470,23 +484,60 @@ runFrontendWithConfigsAndCurrentRoute
   -> Frontend r
   -> IO ()
 runFrontendWithConfigsAndCurrentRoute mode configs _proxy fallback frontend =
-  DH.mainWidgetWithHead (renderPart FrontendHead) (renderPart FrontendBody)
+  DH.withDomHost $ runFrontendWithConfigsAndCurrentRouteJSM mode configs _proxy fallback frontend
+
+type BrowserFrontendEffects r es =
+  Routed DH.DomTimeline r : SetRoute DH.DomTimeline r : RouteToUrl r : Configs : CookiesEff : es
+
+-- | Run in an established browser context; the IO wrapper owns context startup.
+runFrontendWithConfigsAndCurrentRouteJSM
+  :: forall api r. Servant.HasRoute api r
+  => FrontendMode -> Map Text ByteString -> P.Proxy api -> r -> Frontend r -> JSM ()
+runFrontendWithConfigsAndCurrentRouteJSM mode configs _proxy fallback frontend = do
+  when (_frontendMode_hydrate mode) removeHTMLConfigsJSM
+  if _frontendMode_hydrate mode
+    then DH.runHydrationWidgetWithHeadAndBodyWithFailureJSM
+      (ioError $ userError "Frontend hydration diverged from server-rendered HTML")
+      noSwitchoverAction $ \appendHead appendBody -> do
+        appendHead $ renderHydratedPart FrontendHead
+        appendBody $ renderHydratedPart FrontendBody
+    else DH.mainWidgetWithHeadJSM (renderImmediatePart FrontendHead) (renderImmediatePart FrontendBody)
   where
-   renderPart :: forall x es. FrontendPart -> DH.ImmediateWidget x es
-   renderPart part = do
-    when (_frontendMode_hydrate mode) (DH.liftEff removeHTMLConfigs)
-    when (_frontendMode_adjustRoute mode) $
-      DH.liftEff (setInitialRoute (_frontendMode_adjustRoute mode))
-    cookies <- DH.liftEff readCookiesFromDocument
-    DH.liftEff $ runCookies cookies $ runConfigs configs $
-      Routing.runBrowserRoutingWith @r @DH.DomTimeline
-        (Servant.encodeRoute @api)
-        (\url -> let (segments, query) = Servant.urlToSegments url
-                 in Servant.decodeRoute @api segments query)
-        fallback $ do
+   -- No application-specific work is required at the hydration switchover.
+   noSwitchoverAction = pure ()
+   renderImmediatePart :: forall x es. FrontendPart -> DH.ImmediateWidget x es
+   renderImmediatePart part = DH.liftEff $
+      withBrowserFrontendContext mode configs _proxy fallback $ do
         case part of
           FrontendHead -> baseTag
           FrontendBody -> pure ()
         context <- DH.liftJSM JSaddle.askJSM
         DH.runWidgetEff (renderFrontendPart DH.liftEff part frontend)
           (JSContextSingleton context)
+
+   renderHydratedPart :: forall x es. FrontendPart -> DH.HydrationWidget x es
+   renderHydratedPart part = DH.liftEff $
+      withBrowserFrontendContext mode configs _proxy fallback $ do
+        case part of
+          FrontendHead -> baseTag
+          FrontendBody -> pure ()
+        context <- DH.liftJSM JSaddle.askJSM
+        DH.runWidgetEff (renderFrontendPart DH.liftEff part frontend)
+          (JSContextSingleton context)
+
+withBrowserFrontendContext
+  :: forall api r es a.
+     ( Servant.HasRoute api r, HH.Hold DH.DomTimeline :> es
+     , HH.PostBuild DH.DomTimeline :> es, HH.TriggerEvent DH.DomTimeline :> es
+     , HH.PerformEventH DH.DomTimeline :> es, DH.DomRenderHookE DH.DomTimeline :> es
+     , JSM' :> es, IOE :> es )
+  => FrontendMode -> Map Text ByteString -> P.Proxy api -> r
+  -> Eff (BrowserFrontendEffects r es) a -> Eff es a
+withBrowserFrontendContext mode configs _proxy fallback action = do
+  when (_frontendMode_adjustRoute mode) $ setInitialRoute True
+  cookies <- readCookiesFromDocument
+  runCookies cookies $ runConfigs configs $
+    Routing.runBrowserRoutingWith (Servant.encodeRoute @api) decodeRoute fallback action
+  where
+    decodeRoute url = let (segments, query) = Servant.urlToSegments url
+      in Servant.decodeRoute @api segments query

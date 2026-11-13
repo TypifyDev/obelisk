@@ -33,6 +33,7 @@ import Data.Foldable (Foldable(fold))
 import Data.Functor.Identity (Identity)
 import Data.Int (Int8)
 import Data.Map (Map)
+import qualified Data.Map as Map
 import Data.Some (Some)
 import Data.Tabulation (HasFields(Field, tabulateFieldsA, fieldLens))
 import Data.Text (Text)
@@ -53,6 +54,7 @@ import Control.Applicative (liftA2)
 
 import Jenga.Route
 import Jenga.Route.TH
+import qualified Jenga.Route.Servant as Servant
 
 data Input
   = Input_Word Word
@@ -325,6 +327,11 @@ tests = do
     [ testGroup "Exhaustive search" [ exhaustive ]
     , testGroup "Unit testing" [ overlaps ]
     , testGroup "Property testing" [ roundtrips ]
+    , testProperty "browser URL decodes signed tokens and query values" $
+        Servant.urlToSegments "/reset/a%2Fb%2Bc%3D?next=%2Fhome%3Fx%3D1&flag&empty=&label=hello+world"
+          === (["reset", "a/b+c="], Map.fromList
+                [("next", Just "/home?x=1"), ("flag", Nothing),
+                 ("empty", Just ""), ("label", Just "hello world")])
     ]
 
 main :: IO ()

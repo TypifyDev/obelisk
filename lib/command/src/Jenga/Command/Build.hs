@@ -26,6 +26,7 @@ module Jenga.Command.Build
 import Options.Applicative
 import System.Which (staticWhich)
 
+import Jenga.Command.Cabal (withCabalProject)
 import qualified Jenga.Command.Utils as Utils
 import Jenga.Command.Utils
   ( devCrossCabalArgs, devGhcOptions
@@ -59,8 +60,9 @@ buildParser = BuildOpts
       ))
 
 run :: BuildOpts -> IO ()
-run opts = do
+run opts = withCabalProject $ \projectArgs -> do
   let buildArgs = ["build", buildTarget opts, "-O0"]
+                  <> projectArgs
                   <> devGhcOptions
                   <> buildExtraArgs opts
       envVars   = [("JENGA_CROSS_CABAL_ARGS", devCrossCabalArgs)]

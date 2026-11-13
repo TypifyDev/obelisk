@@ -22,13 +22,14 @@ import System.FilePath ((</>), takeExtension)
 import System.Which (staticWhich)
 
 import qualified Data.Text as T
+import Jenga.Command.Cabal (withCabalProject)
 import Jenga.Command.Run.Config
   ( JengaRunConfig (..), PaneConfig (..)
   , defaultConfigPath, loadConfig
   )
 import Jenga.Command.Utils
   ( devGhcOptions
-  , execProcess, info
+  , runProcessWithEnv, info
   )
 
 ghcidPath, cabalPath :: FilePath
@@ -83,13 +84,13 @@ run opts = do
   metadata <- concat <$> mapM thunkCabalFiles thunks
 
   -- Sideline ~/.ghci for the lifetime of the ghcid session.
-  bracket_ sidelineUserGhci restoreUserGhci $ do
-    scriptPath <- writeRunScript opts cfg metadata restartThunks
+  bracket_ sidelineUserGhci restoreUserGhci $ withCabalProject $ \projectArgs -> do
+    scriptPath <- writeRunScript opts cfg metadata restartThunks projectArgs
     info "Starting ghcid (multi-repl). Output in this terminal AND tee'd to:"
     info "  /tmp/jenga-ghcid.log"
     info "Edit a .hs file under configured discoveryDirs; ghcid reloads on save."
     info "Ctrl-C to exit."
-    execProcess "/usr/bin/env" ["nix-shell", "shell.nix", "--run", "bash " <> scriptPath]
+    runProcessWithEnv "/usr/bin/env" ["nix-shell", "shell.nix", "--run", "bash " <> scriptPath] []
 
 -- ---------------------------------------------------------------------------
 -- Compiler loop
@@ -114,8 +115,9 @@ writeRunScript
   -> JengaRunConfig
   -> [FilePath]      -- ^ thunk package manifests
   -> [FilePath]      -- ^ restart-only thunks
+  -> [String]        -- ^ resolved Cabal project arguments
   -> IO FilePath
-writeRunScript opts cfg metadata restartThunks = do
+writeRunScript opts cfg metadata restartThunks projectArgs = do
   let scriptPath = "/tmp/jenga-ghcid.sh"
       ghciCmdPath = "/tmp/jenga-ghcid-ghci.cmd"
       logPath = "/tmp/jenga-ghcid.log"
@@ -126,11 +128,11 @@ writeRunScript opts cfg metadata restartThunks = do
       -- Cabal loads each library in its own unit with its declared extensions.
       -- :add would create a separate interactive unit without those settings.
       ghciDirectives = unlines onReloadLine
-      replCmd = unwords $
+      replCmd = unwords $ map shQuote $
         [ cabalPath, "repl", "--enable-multi-repl", multiTarget
         , "-O0"
         , "--repl-options=-ignore-dot-ghci"
-        ] <> devGhcOptions <> runExtraArgs opts
+        ] <> projectArgs <> devGhcOptions <> runExtraArgs opts
       restartArgs = unwords $
         [ "--restart=cabal.project"
         , "--restart=backend/backend.cabal"

@@ -79,7 +79,7 @@ staticModuleFile moduleName paths = do
     , "import Data.Monoid ((<>))"
     , ""
     , "static :: forall a. StaticFile a => Text"
-    , "static = \"static/\" <> staticPath @a" --TODO: Use jenga-route to generate this in a more consistent way
+    , "static = \"/static/\" <> staticPath @a"
     , ""
     , T.pack $ pprint decs
     ]

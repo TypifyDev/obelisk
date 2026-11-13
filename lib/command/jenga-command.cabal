@@ -43,6 +43,7 @@ library
     Jenga.Command.Utils
     Obelisk.App
   other-modules:
+    Jenga.Command.Cabal
     Paths_jenga_command
   autogen-modules:
     Paths_jenga_command
@@ -64,6 +65,7 @@ library
     , mtl
     , nix-thunk
     , text
+    , temporary
     , transformers
   default-language: GHC2024
   default-extensions:

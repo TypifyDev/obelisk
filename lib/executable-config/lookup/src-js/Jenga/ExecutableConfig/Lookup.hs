@@ -1,17 +1,19 @@
-{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE PackageImports #-}
 module Jenga.ExecutableConfig.Lookup where
 
 import Data.ByteString (ByteString)
-import qualified Data.ByteString.Base64 as B64
+import Control.Monad.IO.Class (liftIO)
+import Control.Monad.Trans.Class (lift)
+import Control.Monad.Trans.Except (ExceptT, runExceptT, throwE)
+import qualified "base64-bytestring" Data.ByteString.Base64 as B64
 import Data.Map (Map)
 import qualified Data.Map as Map
 import Data.Maybe (catMaybes)
 import Data.Text (Text)
 import qualified Data.Text.Encoding as T
-import Data.Traversable (for)
 import GHCJS.DOM
-import GHCJS.DOM.Document (getHead)
+import "ghcjs-dom" GHCJS.DOM.Document (getHead)
 import GHCJS.DOM.DOMStringMap (get)
 import GHCJS.DOM.Element (getInnerHTML)
 import GHCJS.DOM.HTMLElement (HTMLElement(HTMLElement), getDataset)
@@ -21,23 +23,31 @@ import GHCJS.DOM.Types (MonadJSM, Node(Node), castTo)
 import Language.Javascript.JSaddle (JSM)
 
 getConfigs :: JSM (Map Text ByteString)
-getConfigs = do
-  Just doc <- currentDocument
-  Just hd <- getHead doc
-  nodes <- nodeListNodes =<< querySelectorAll hd ("[data-jenga-executable-config-inject-key]" :: Text)
-  fmap Map.fromList $ for nodes $ \node -> do
-    e <- castTo HTMLElement node >>= \case
-      Nothing -> error "Found node with data attribute jenga-executable-config-inject-key that is not an HTMLElement."
-      Just htmlE -> pure htmlE
-    dataset <- getDataset e
-    (,)
-      -- the key is camelCased: https://html.spec.whatwg.org/multipage/dom.html#dom-dataset
-      <$> get dataset ("jengaExecutableConfigInjectKey" :: Text)
-      <*> (fmap decodeOrFail (getInnerHTML e))
-  where
-    decodeOrFail x = case B64.decode (T.encodeUtf8 x) of
-      Left e -> error ("Jenga.ExecutableConfig.Lookup.getConfigs: error when decoding base64: " <> e)
-      Right x' -> x'
+getConfigs = getConfigsResult >>= either (liftIO . ioError . userError . show) pure
+
+data ConfigLookupError
+  = MissingDocument
+  | MissingHead
+  | InvalidConfigElement
+  | InvalidConfigEncoding Text String
+  deriving (Eq, Show)
+
+-- | Preserve the complete typed ingestion result for callers that recover.
+getConfigsResult :: JSM (Either ConfigLookupError (Map Text ByteString))
+getConfigsResult = runExceptT $ do
+  doc <- lift currentDocument >>= maybe (throwE MissingDocument) pure
+  hd <- lift (getHead doc) >>= maybe (throwE MissingHead) pure
+  nodes <- lift $ nodeListNodes =<< querySelectorAll hd ("[data-jenga-executable-config-inject-key]" :: Text)
+  Map.fromList <$> traverse readConfigNode nodes
+
+readConfigNode :: Node -> ExceptT ConfigLookupError JSM (Text, ByteString)
+readConfigNode node = do
+  element <- lift (castTo HTMLElement node) >>= maybe (throwE InvalidConfigElement) pure
+  dataset <- lift $ getDataset element
+  key <- lift $ get dataset ("jengaExecutableConfigInjectKey" :: Text)
+  encoded <- lift $ getInnerHTML element
+  decoded <- either (throwE . InvalidConfigEncoding key) pure $ B64.decode (T.encodeUtf8 encoded)
+  pure (key, decoded)
 
 -- | Collect all nodes in the node list.
 --

@@ -396,11 +396,16 @@ in rec {
   # Assemble a flat deployment directory for the given frontend target.
   # Contains the backend binary, compressed static/frontend assets.
   mkServerExe = { proj, target }:
-    let targetProj = proj.override { jenga.frontend.target = target; };
+    let targetProj = proj.override {
+          jenga.frontend.target = target;
+          jenga.buildAssets = true;
+        };
         backendExe = targetProj.hsPkgs.backend.components.exes.backend;
         compressedStatic = targetProj.config.jenga.static.compressed;
         compressedFrontend = targetProj.config.jenga.frontend.${target}.compressed;
-    in pkgs.runCommand "server-exe" {} ''
+    in if compressedFrontend == null then
+      throw "Jenga serverExe requires a compiled frontend; its selected frontend package must not be null."
+    else pkgs.runCommand "server-exe" { nativeBuildInputs = [ pkgs.makeWrapper ]; } ''
       mkdir $out
       set -eux
       ln -s ${backendExe}/bin/* $out/
@@ -410,6 +415,9 @@ in rec {
       ${pkgs.lib.optionalString (compressedFrontend != null) ''
         ln -s ${compressedFrontend} $out/frontend.jsexe.assets
       ''}
+      wrapProgram $out/backend \
+        --set-default JENGA_FRONTEND_ASSETS ${compressedFrontend} \
+        ${pkgs.lib.optionalString (compressedStatic != null) ''--set-default JENGA_STATIC_ASSETS ${compressedStatic}''}
     '';
 
   # Build an OCI container image (podman/docker) for the given frontend target.

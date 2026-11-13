@@ -53,6 +53,15 @@ import qualified Jenga.Route.Servant               as Servant
 
 -- ─── Browser interpreter ───────────────────────────────────────
 
+-- Read before constructing route-dependent widgets: the fallback can have
+-- effects such as redirects and must only run for an unrecognized URL.
+browserUrl :: JS.JSM Text
+browserUrl = do
+  location <- JS.jsg ("window" :: Text) JS.! ("location" :: Text)
+  path <- JS.valToText =<< location JS.! ("pathname" :: Text)
+  query <- JS.valToText =<< location JS.! ("search" :: Text)
+  pure $ path <> query
+
 -- | Run routing effects using the browser History API.
 --
 -- @
@@ -102,18 +111,13 @@ runBrowserRoutingWith
   -> Eff (Routed t r : SetRoute t r : RouteToUrl r : es) a
   -> Eff es a
 runBrowserRoutingWith encRoute decRoute fallback eff = do
+  initialUrl <- DH.liftJSM browserUrl
   -- Shared trigger: both popstate AND setRoute fire through this
   (urlEv, fireUrl) <- HH.newTriggerEventE @t
 
-  -- On postBuild: read initial URL + set up popstate listener
+  -- Install history notifications after the initial widget is built.
   pb <- HH.getPostBuildE @t
   DH.requestDomAction_ @t $ R.ffor pb $ \_ -> do
-    pathname <- JS.valToText =<< JS.jsg ("window" :: Text)
-      JS.! ("location" :: Text) JS.! ("pathname" :: Text)
-    search <- JS.valToText =<< JS.jsg ("window" :: Text)
-      JS.! ("location" :: Text) JS.! ("search" :: Text)
-    CMIO.liftIO $ fireUrl (pathname <> search)
-
     -- Listen for popstate (browser back/forward)
     cb <- JS.function $ \_ _ _ -> do
       p <- JS.valToText =<< JS.jsg ("window" :: Text)
@@ -132,7 +136,7 @@ runBrowserRoutingWith encRoute decRoute fallback eff = do
       parseOrFallback url = Maybe.fromMaybe fallback (decRoute url)
 
   -- Hold the current route (updated by both popstate AND setRoute)
-  routeDyn <- HH.holdDynE @t fallback (parseOrFallback <$> urlEv)
+  routeDyn <- HH.holdDynE @t (parseOrFallback initialUrl) (parseOrFallback <$> urlEv)
 
   -- Store fireUrl in IORef so SetRoute interpreter can access it
   fireRef <- ES.unsafeEff_ $ IORef.newIORef fireUrl

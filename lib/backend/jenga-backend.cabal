@@ -6,6 +6,7 @@ build-type: Simple
 library
   hs-source-dirs: src
   build-depends: base,
+                 async,
                  bytestring,
                  categories,
                  containers,
@@ -14,6 +15,9 @@ library
                  dependent-sum,
                  dependent-sum-template,
                  lens,
+                 http-client,
+                 http-reverse-proxy >= 0.6 && < 0.7,
+                 network,
                  mtl,
                  jenga-asset-serve-snap,
                  jenga-executable-config-inject,
@@ -26,8 +30,12 @@ library
                  snap,
                  snap-server,
                  text,
-                 universe
+                 universe,
+                 wai,
+                 wai-websockets,
+                 warp
   exposed-modules: Jenga.Backend
+                   Jenga.Backend.Development
   ghc-options: -Wall -Werror -Wredundant-constraints -Wincomplete-uni-patterns -Wincomplete-record-updates -O
 
   default-language: GHC2024

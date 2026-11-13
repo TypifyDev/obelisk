@@ -22,6 +22,7 @@ module Jenga.Backend
   , runSnapWithCommandLineArgs
   , runSnapWithConfig
   , runBackend
+  , runBackendWithConfig
   , prettifyOutput
   -- * Route helpers
   , getPageName
@@ -52,6 +53,7 @@ import Data.Default (Default (..))
 import Data.Functor.Identity
 import Data.Map (Map)
 import qualified Data.Map as Map
+import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
 import GHC.Generics (Generic)
@@ -65,6 +67,7 @@ import Snap (MonadSnap, Snap, commandLineConfig, defaultConfig, getsRequest, htt
             , rqPathInfo, rqQueryString)
 import Snap.Internal.Http.Server.Config (Config (accessLog, errorLog), ConfigLog (ConfigIoLog))
 import System.IO (BufferMode (..), hSetBuffering, stderr, stdout)
+import System.Environment (lookupEnv)
 
 data Backend backendRoute frontendRoute = Backend
   { _backend_routeEncoder :: Encoder (Either Text) Identity (R (FullRoute backendRoute frontendRoute)) PageName
@@ -75,12 +78,22 @@ data Backend backendRoute frontendRoute = Backend
 -- continuation. Servant applications use Jenga.Backend.Servant instead.
 runBackend :: Backend br fr -> Frontend.Frontend (R fr) -> IO ()
 runBackend backend frontend = do
+  conf <- commandLineConfig defaultConfig
+  runBackendWithConfig conf backend frontend
+
+-- | Run the same backend handlers with an explicit listener configuration.
+-- Development hosts use this to keep their internal listener on loopback.
+runBackendWithConfig :: Config Snap () -> Backend br fr -> Frontend.Frontend (R fr) -> IO ()
+runBackendWithConfig conf backend frontend = do
   encoder <- either (fail . T.unpack) pure $ checkEncoder $ _backend_routeEncoder backend
   configs <- getPublicConfigs
-  _backend_run backend $ \handleBackend -> runSnapWithCommandLineArgs $
+  assetRoot <- fromMaybe "static" <$> lookupEnv "JENGA_STATIC_ROOT"
+  staticAssets <- fromMaybe "static.assets" <$> lookupEnv "JENGA_STATIC_ASSETS"
+  frontendAssets <- fromMaybe "frontend.jsexe.assets" <$> lookupEnv "JENGA_FRONTEND_ASSETS"
+  _backend_run backend $ \handleBackend -> runSnapWithConfig conf $
     Snap.route
-      [ ("static", Assets.serveAssets "static.assets" "static")
-      , ("ghcjs", Assets.serveAssets "frontend.jsexe.assets" "frontend.jsexe")
+      [ ("static", Assets.serveAssets staticAssets assetRoot)
+      , ("ghcjs", Assets.serveAssets frontendAssets "frontend.jsexe")
       ] <|> serveEncodedRoute encoder configs frontend handleBackend
 
 serveEncodedRoute

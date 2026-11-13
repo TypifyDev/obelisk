@@ -1,4 +1,5 @@
 {-# LANGUAGE AllowAmbiguousTypes   #-}
+{-# LANGUAGE CPP #-}
 {-# LANGUAGE ConstraintKinds       #-}
 {-# LANGUAGE DataKinds             #-}
 {-# LANGUAGE FlexibleContexts      #-}
@@ -241,6 +242,7 @@ module Reflex.Effectful.DomHost
   , mainWidgetInElementById
   , mainWidgetWithCss
   , mainWidgetWithHead
+  , mainWidgetWithHeadJSM
   , mainWidgetWithHead'
   , attachWidget
   , attachWidget'
@@ -308,6 +310,7 @@ module Reflex.Effectful.DomHost
   , mainHydrationWidgetWithSwitchoverActionWithFailure'
   , runHydrationWidgetWithHeadAndBody
   , runHydrationWidgetWithHeadAndBodyWithFailure
+  , runHydrationWidgetWithHeadAndBodyWithFailureJSM
     -- * JSM-per-event helpers
   , performJSMEvent
   , performJSMEvent_
@@ -328,6 +331,7 @@ module Reflex.Effectful.DomHost
   , StaticE
   , runHasDocumentStatic
   , runDomBuilderStatic
+  , runHydratableE
   , runTriggerEventStatic
   , runNotReadyStatic
   , runAdjustableStatic
@@ -630,9 +634,10 @@ import           Control.Concurrent.Chan                     (Chan, newChan,
                                                               readChan,
                                                               writeChan)
 import           Control.Concurrent.MVar                     (MVar,
-                                                              newEmptyMVar,
+                                                              newEmptyMVar, newMVar,
                                                               putMVar, readMVar,
-                                                              takeMVar)
+                                                              takeMVar, withMVar)
+import           System.IO.Unsafe                            (unsafePerformIO)
 import           Control.Lens                                (imapM_, (^.), (&), (.~), (%~))
 import           Control.Monad                               (forM, when)
 import           Data.Dependent.Sum                          (DSum ((:=>)))
@@ -709,12 +714,18 @@ import qualified Language.Javascript.JSaddle                 as JS
 import qualified Data.FastMutableIntMap                      as FastMutableIntMap
 
 -- Application hosting
+#if defined(wasm32_HOST_ARCH)
+import qualified Language.Javascript.JSaddle.Wasm            as Wasm
+#else
 import qualified Language.Javascript.JSaddle.Warp            as Warp
+#endif
 import qualified GHCJS.DOM                                   as GHCJS.DOM
 import           GHCJS.DOM.Document                          (getBodyUnchecked, getDefaultViewUnchecked)
 import qualified GHCJS.DOM.NonElementParentNode              as NonElementParentNode
 import           GHCJS.DOM.Types                             (toDocument)
+#if !defined(wasm32_HOST_ARCH)
 import           System.Environment                          (lookupEnv)
+#endif
 import           Text.Read                                   (readMaybe)
 import qualified Text.Read                                   as TR
 import           Data.ByteString                             (ByteString)
@@ -900,6 +911,7 @@ import qualified Reflex.Class                                as RClass (mapAccum
 
 -- MTL-class instance imports (bilingual pattern like eff-reflex).
 import qualified Reflex.Dom.Builder.Class                    as RDBC
+import qualified Reflex.Dom.Builder.Hydratable               as RDH
 import qualified Reflex.Dom.Prerender                        as RDPR
 import qualified Reflex.Adjustable.Class                     as RAdj
 import           Control.Monad.Primitive                     (PrimMonad (..))
@@ -963,6 +975,25 @@ data DomBuilderE (t :: Type) (space :: Type) :: Effect where
     -> DomBuilderE t space m (Element er space t)
 
 type instance DispatchOf (DomBuilderE t space) = 'Dynamic
+
+-- | Effectful twin of 'RDH.runHydratableT': mark SSR elements for hydration.
+-- Attribute updates preserve the marker, matching the MTL builder's contract.
+runHydratableE
+  :: forall t space es a. (DomBuilderE t space :> es, R.Reflex t)
+  => Eff es a -> Eff es a
+runHydratableE = interpose $ \env command -> localSeqUnlift env $ \unlift ->
+  case command of
+    DB_Element tag cfg child -> send @(DomBuilderE t space) $ DB_Element tag (RDH.makeHydratable cfg) (unlift child)
+    DB_InputElement cfg -> send @(DomBuilderE t space) $ DB_InputElement cfg
+      { _inputElementConfig_elementConfig = RDH.makeHydratable $ _inputElementConfig_elementConfig cfg }
+    DB_TextAreaElement cfg -> send @(DomBuilderE t space) $ DB_TextAreaElement cfg
+      { _textAreaElementConfig_elementConfig = RDH.makeHydratable $ _textAreaElementConfig_elementConfig cfg }
+    DB_SelectElement cfg child -> send @(DomBuilderE t space) $ DB_SelectElement cfg
+      { _selectElementConfig_elementConfig = RDH.makeHydratable $ _selectElementConfig_elementConfig cfg } (unlift child)
+    DB_TextNode cfg -> send @(DomBuilderE t space) $ DB_TextNode cfg
+    DB_CommentNode cfg -> send @(DomBuilderE t space) $ DB_CommentNode cfg
+    DB_PlaceRawElement element -> send @(DomBuilderE t space) $ DB_PlaceRawElement element
+    DB_WrapRawElement element cfg -> send @(DomBuilderE t space) $ DB_WrapRawElement element cfg
 
 -- | Given an effect row, resolve to the 'space' phantom of the row's
 -- 'DomBuilderE' effect. Recurses through the row until it finds the
@@ -2886,23 +2917,11 @@ hydrateElement elementTag cfg child = do
   childDom <- liftIO $ readIORef childDelayedRef
   (esel, filterTriggers, elMVar)
     <- allocateFilterTriggers @er @t @HydrationDomSpace (extractRawElementConfig cfg)
-  -- Wire modifyAttributes at BUILD time (mirrors upstream's 'wrap events e rawCfg'
-  -- at reflex-dom-core/Immediate.hs:881). The reactive subscription is
-  -- established now; the JSM action reads 'eRef' at drain-time (populated by
-  -- the walker inside addHydrationStep below). Without this, hydration-mode
-  -- 'element' with 'modifyAttributes' silently drops all attribute patches —
-  -- the immediate-mode path (elementImmediate → wrap) handles it, but the
-  -- hydration path had no equivalent, breaking 'can add/update/remove
-  -- attributes' and any downstream widget using modifyAttributes in hydration.
+  -- Initial postBuild precedes the DOM walk. Retain its attribute patches
+  -- without touching an element until the walker has attached it.
   let rawCfg = extractRawElementConfig cfg
-  forM_ (_rawElementConfig_modifyAttributes rawCfg) $ \modifyAttrs ->
-    requestDomAction_ @t $ RC.ffor modifyAttrs $ \attrs -> do
-      e <- liftIO $ readIORef eRef
-      imapM_
-        (\(AttributeName mAttrNs n) mv -> case mAttrNs of
-           Nothing -> maybe (Element.removeAttribute e n) (Element.setAttribute e n) mv
-           Just ns -> maybe (Element.removeAttributeNS e (Just ns) n) (Element.setAttributeNS e (Just ns) n) mv)
-        attrs
+  attributeUpdates <- traverse (captureHydrationAttributeUpdates @t)
+    (_rawElementConfig_modifyAttributes rawCfg)
   addHydrationStep @t $ do
     parent <- askParent
     lastHydrationNode <- getPreviousNode
@@ -2911,10 +2930,36 @@ hydrateElement elementTag cfg child = do
     liftIO $ do
       writeIORef parentRef $ toNode e
       writeIORef eRef e
+    traverse_ (wireHydratedAttributeUpdates @t e) attributeUpdates
     _teardown <- attachDomListeners @er @t @HydrationDomSpace events e
                    (extractRawElementConfig cfg) filterTriggers elMVar
     driveChildRunner @t childDom (toNode e)
   pure ((Element esel (), result), eRef)
+
+captureHydrationAttributeUpdates
+  :: forall t es. (R.Reflex t, HH.Hold t :> es, HH.Sample t :> es)
+  => R.Event t (Map AttributeName (Maybe Text))
+  -> Eff es (R.Behavior t (Map AttributeName (Maybe Text)), R.Event t (Map AttributeName (Maybe Text)))
+captureHydrationAttributeUpdates updates = do
+  latest <- RD.foldDyn Map.union Map.empty updates
+  pure (R.current latest, updates)
+
+wireHydratedAttributeUpdates
+  :: forall t es. (R.Reflex t, HH.Sample t :> es, DomRenderHookE t :> es, JSM' :> es)
+  => DOM.Element
+  -> (R.Behavior t (Map AttributeName (Maybe Text)), R.Event t (Map AttributeName (Maybe Text)))
+  -> Eff es ()
+wireHydratedAttributeUpdates element (pending, updates) = do
+  initial <- HH.sampleE @t pending
+  liftJSM_ $ applyAttributePatch element initial
+  requestDomAction_ @t $ applyAttributePatch element <$> updates
+
+applyAttributePatch :: DOM.Element -> Map AttributeName (Maybe Text) -> JSM ()
+applyAttributePatch element = imapM_ $ \(AttributeName namespace name) value ->
+  case namespace of
+    Nothing -> maybe (Element.removeAttribute element name) (Element.setAttribute element name) value
+    Just ns -> maybe (Element.removeAttributeNS element (Just ns) name)
+      (Element.setAttributeNS element (Just ns) name) value
 
 -- | Runner-scope walker for 'hydrateElement'. Recursion descends
 -- through siblings until it finds a matching element or runs out.
@@ -2990,8 +3035,9 @@ driveChildRunner
   -> Node
   -> Eff es ()
 driveChildRunner (RunnerAction childDom) newParent = do
-  outerState <- get @HydrationState
-  let seed = outerState { _hydrationState_previousNode = Nothing }
+  -- Child failures are merged once on return. Seeding them with the parent's
+  -- list would duplicate every prior failure for each subsequent element.
+  let seed = HydrationState Nothing False []
   (_, childState) <-
     runReader newParent
       (runState seed childDom)
@@ -4353,15 +4399,16 @@ collectUpToJSM s0 e0 = do
 -- crashes on unparseable env value rather than silently defaulting),
 -- log line preserved, default port 3003.
 --
--- Cross-platform CPP dispatch is handled by @Reflex.Dom.Internal.run@
--- (in the @reflex-dom@ umbrella package). This fn is jsaddle-warp-only;
--- callers wanting GHCJS/WKWebView/Android/WASM should route through the
--- umbrella's @mainWidget*@ instead of this one.
+-- WASM uses the in-browser JSaddle runtime; native development uses Warp.
 withDomHost :: JSM () -> IO ()
+#if defined(wasm32_HOST_ARCH)
+withDomHost = Wasm.run
+#else
 withDomHost act = do
   port <- maybe 3003 TR.read <$> lookupEnv "JSADDLE_WARP_PORT"
   putStrLn $ "Running jsaddle-warp server on port " <> P.show port
   Warp.run port act
+#endif
 
 -- =====================================================================
 -- mainWidget composer (immediate mode, Global timeline).
@@ -4965,6 +5012,16 @@ type EventChannel =
 newtype FireCommand = FireCommand
   { runFireCommand :: [DSum (R.SI.RootTrigger R.SI.Global) Identity] -> IO () }
 
+-- Construction and drain frames share Global's pending-initialization queues.
+-- Serialize both phases across browser connections, including the work outside
+-- Spider's narrower propagation lock.
+{-# NOINLINE domHostFrameLock #-}
+domHostFrameLock :: MVar ()
+domHostFrameLock = unsafePerformIO (newMVar ())
+
+withDomHostFrame :: IO a -> IO a
+withDomHostFrame action = withMVar domHostFrameLock $ const action
+
 -- | Analog of upstream reflex's
 -- @Reflex.Host.Class.newEventWithTriggerRef :: m (Event t a, Ref m (Maybe (EventTrigger t a)))@.
 -- Specialised to 'IO' + 'Global' timeline. Allocates a fresh spider
@@ -5009,7 +5066,7 @@ hostPerformEventT act = HH.EffectfulHost $ do
   actionsHandle  <- HH.subscribeEventE @(DomTimeline) aggActions
   shutdownHandle <- HH.subscribeEventE @(DomTimeline)
                       (R.never :: R.Event (DomTimeline) ())
-  let fc = FireCommand $ \fires ->
+  let fc = FireCommand $ \fires -> withDomHostFrame $
         void $ HH.fireAndDrain @R.SI.Global
                  fires actionsHandle shutdownHandle respTrigRef
   pure (result, fc)
@@ -5036,23 +5093,19 @@ attachImmediateWidget
 attachImmediateWidget w = do
   hydrationMode <- newIORef HydrationMode_Immediate
   events        <- newChan
-  HH.runEffectfulHost $ do
-    ((result, postBuildTriggerRef), fc@(FireCommand fire)) <-
+  ((result, postBuildTriggerRef), fc) <-
+    withDomHostFrame $ HH.runEffectfulHost $
       hostPerformEventT (w hydrationMode events)
-    mPostBuildTrigger <- liftIO (readIORef postBuildTriggerRef)
-    liftIO $ forM_ mPostBuildTrigger $ \postBuildTrigger ->
-      fire [postBuildTrigger :=> Identity ()]
-    -- Option 3: fork drain INSIDE runEffectfulHost's scope. Callers must
-    -- NOT fork processAsyncEvents again outside. Since Spider's timeline
-    -- is a static global (runTimeline is a no-op interpreter — see
-    -- HeadlessEffectful.hs:1721), the fork thread inherits it via
-    -- HasSpiderTimeline. Callbacks that rebuild widgets (runWithReplace
-    -- replacements) still need effectful handlers alive; those handlers
-    -- live in this runEffectfulHost scope. Whether that scope survives
-    -- across attachImmediateWidget's return is the open question — this
-    -- is the minimal fix; escalate to continuation-passing if not enough.
-    _ <- liftIO $ forkIO $ processAsyncEvents events fc
-    pure (result, fc)
+  fireInitialPostBuild fc postBuildTriggerRef
+  -- Deferred replacement callbacks retain their own Effectful environments.
+  void $ forkIO $ processAsyncEvents events fc
+  pure (result, fc)
+
+fireInitialPostBuild
+  :: FireCommand -> IORef (Maybe (R.SI.RootTrigger R.SI.Global ())) -> IO ()
+fireInitialPostBuild (FireCommand fire) triggerRef = do
+  trigger <- readIORef triggerRef
+  for_ trigger $ \postBuildTrigger -> fire [postBuildTrigger :=> Identity ()]
 
 -- | Parallel to 'attachImmediateWidget' using the AdjustableE
 -- machinery. Uses 'hostPerformEventTAE' + 'runAdjustableEStandalone'.
@@ -5262,7 +5315,11 @@ mainWidgetWithCss css w = withDomHost $
 -- | Analog of upstream's @mainWidgetWithHead@ (Reflex.Dom.Main:121).
 -- Run two widgets — one on @<head>@, one on @<body>@.
 mainWidgetWithHead :: (forall x es. ImmediateWidget x es) -> (forall x es. ImmediateWidget x es) -> IO ()
-mainWidgetWithHead h b = withDomHost $
+mainWidgetWithHead h b = withDomHost $ mainWidgetWithHeadJSM h b
+
+-- | Mount head and body in an existing browser context.
+mainWidgetWithHeadJSM :: (forall x es. ImmediateWidget x es) -> (forall x es. ImmediateWidget x es) -> JSM ()
+mainWidgetWithHeadJSM h b =
   withJSContextSingleton $ \jsSing -> do
     doc  <- GHCJS.DOM.currentDocumentUnchecked
     hd   <- Document.getHeadUnchecked doc
@@ -5644,16 +5701,11 @@ instance
         liftIO (trigger b)
         append @t (toNode df)
       HydrationMode_Hydrating -> do
-        -- Fix A + SeqForkUnlift: the deferred client runs in a FRESH
-        -- COPY of the effectful env at invocation time, so it doesn't
-        -- get invalidated by env mutations the parent performs between
-        -- 'withEffToIO' and the deferred invocation. 'runReader
-        -- clientEnv' installs the client's HydrationEnv freshly in
-        -- that copy — no cross-invocation state leakage. Subscribers
-        -- (e.g. 'newTriggerEventE') register the trigger ref into the
-        -- shared 'events' Chan (IO-carried, not effectful state), so
-        -- 'processAsyncEvents' in the parent DOES see them.
-        clientRunIO <- withEffToIO SeqForkUnlift $ \unlift ->
+        -- Switchover runs on the asynchronous event-drain thread.
+        -- Clone the captured environment per invocation while allowing
+        -- that thread change; the event channel remains shared through IO.
+        -- The client's HydrationEnv is freshly installed in each copy.
+        clientRunIO <- withEffToIO (E.ConcUnlift E.Ephemeral E.Unlimited) $ \unlift ->
           pure $ do
             b <- unlift $
                    runReader clientEnv
@@ -6202,7 +6254,19 @@ runHydrationWidgetWithHeadAndBodyWithFailure
      )
   -> IO ()
 runHydrationWidgetWithHeadAndBodyWithFailure onFailure switchoverAction app =
-  withDomHost $
+  withDomHost $ runHydrationWidgetWithHeadAndBodyWithFailureJSM onFailure switchoverAction app
+
+-- | Hydrate in an existing browser context, retaining failure reporting.
+runHydrationWidgetWithHeadAndBodyWithFailureJSM
+  :: IO ()
+  -> JSM ()
+  -> ( forall x esF. FloatingWidgetE esF
+      => (forall c. (forall esW. HydrationWidgetE esW => WidgetEff DomTimeline x esW c) -> Eff esF c)
+      -> (forall c. (forall esW. HydrationWidgetE esW => WidgetEff DomTimeline x esW c) -> Eff esF c)
+      -> Eff esF ()
+     )
+  -> JSM ()
+runHydrationWidgetWithHeadAndBodyWithFailureJSM onFailure switchoverAction app =
   withJSContextSingleton $ \(jsSing :: JSContextSingleton x) -> do
     ctx      <- JSaddle.askJSM
     doc      <- GHCJS.DOM.currentDocumentUnchecked

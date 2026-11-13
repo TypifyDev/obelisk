@@ -1,4 +1,5 @@
 {-# LANGUAGE AllowAmbiguousTypes #-}
+{-# LANGUAGE CPP #-}
 {-# LANGUAGE ConstraintKinds     #-}
 {-# LANGUAGE DataKinds           #-}
 {-# LANGUAGE FlexibleContexts    #-}
@@ -113,7 +114,9 @@ import           Data.IORef                          (IORef, modifyIORef',
 import           Data.Text                           (Text)
 import qualified Data.Text                           as T
 import           Data.Text.Encoding                  (decodeUtf8)
+#if !defined(wasm32_HOST_ARCH)
 import           System.Environment                  (lookupEnv)
+#endif
 
 import           Effectful                           (Eff, IOE, runEff, (:>))
 import           Effectful.Dispatch.Dynamic          (interpret)
@@ -133,7 +136,11 @@ import           GHCJS.DOM.Types                     (JSContextRef, JSM,
                                                       toDocument)
 
 import           Language.Javascript.JSaddle         (askJSM, runJSM)
+#if defined(wasm32_HOST_ARCH)
+import qualified Language.Javascript.JSaddle.Wasm    as Wasm
+#else
 import qualified Language.Javascript.JSaddle.Warp    as Warp
+#endif
 
 import qualified Reflex.Class              as R
 
@@ -499,15 +506,16 @@ mainWidgetInElementById eid w = withDomHost $ do
 -- crashes on unparseable env value rather than silently defaulting),
 -- log line preserved, default port 3003.
 --
--- Cross-platform CPP dispatch is handled by @Reflex.Dom.Internal.run@
--- (in the @reflex-dom@ umbrella package). This fn is jsaddle-warp-only;
--- callers wanting GHCJS/WKWebView/Android/WASM should route through the
--- umbrella's @mainWidget*@ instead of this one.
+-- WASM uses the in-browser JSaddle runtime; native development uses Warp.
 withDomHost :: JSM () -> IO ()
+#if defined(wasm32_HOST_ARCH)
+withDomHost = Wasm.run
+#else
 withDomHost act = do
   port <- maybe 3003 read <$> lookupEnv "JSADDLE_WARP_PORT"
   putStrLn $ "Running jsaddle-warp server on port " <> show port
   Warp.run port act
+#endif
 
 -- ---------------------------------------------------------------------
 -- Hydration bootstrap: widget-scope constraint synonyms

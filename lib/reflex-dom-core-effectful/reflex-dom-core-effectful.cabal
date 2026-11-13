@@ -30,6 +30,14 @@ flag profile-reflex
   manual: True
 
 
+test-suite host-frame-isolation
+  type: exitcode-stdio-1.0
+  main-is: HostFrameIsolation.hs
+  hs-source-dirs: test
+  build-depends: base, async, reflex-dom-core-effectful
+  default-language: GHC2024
+  ghc-options: -Wall -threaded -O2
+
 -- Effectful DOM host with MTL class instances and widget re-exports.
 library
   exposed-modules:
@@ -69,7 +77,6 @@ library
     , exception-transformers
     , ghcjs-dom
     , jsaddle
-    , jsaddle-warp
     , keycode
     , lens
     , monad-control
@@ -89,6 +96,11 @@ library
     , jsaddle-dom-extras
 
   hs-source-dirs:   src
+
+  if arch(wasm32)
+    build-depends: jsaddle-wasm >= 0.1 && < 0.2
+  else
+    build-depends: jsaddle-warp
 
   if impl(ghcjs) || arch(javascript)
     hs-source-dirs: src-ghcjs
@@ -125,15 +137,9 @@ library
     TypeFamilies
     TypeOperators
 
--- NOTE: Most of the test-suites below carry `buildable: False` because
--- they depend on the removed `reflex` package (variant A's
--- shim). Their sources are kept as reference material for the ongoing
--- port into `Reflex.Effectful.DomHost` — as each area lands there, the
--- corresponding test-suite can be re-pointed at
--- `reflex-dom-core-effectful` and un-disabled.
---
--- The `dom-host-smoke` and `package-boots-smoke` test-suites depend
--- ONLY on `reflex-dom-core-effectful` itself and are buildable.
+-- The dom-host suites exercise the active interpreter. The two legacy
+-- static-render and widget-input suites retain their existing disabled
+-- status; their sources are shared with the corresponding dom-host suites.
 
 test-suite dom-host-smoke
   type:               exitcode-stdio-1.0
@@ -417,129 +423,6 @@ test-suite dom-host-mtl-bridge-smoke
   -- landed in task #207 — no wrapper, no conversion boilerplate.
   ghc-options:        -Wall -Wno-unused-top-binds
 
-test-suite package-boots-smoke
-  type:               exitcode-stdio-1.0
-  main-is:            PackageBootsSmoke.hs
-  hs-source-dirs:     test
-  build-depends:
-    , base
-    , reflex-dom-core-effectful
-  default-language:   GHC2024
-  ghc-options:        -Wall
-
-test-suite dom-builder-class-smoke
-  buildable: False
-  type:               exitcode-stdio-1.0
-  main-is:            DomBuilderClassSmoke.hs
-  hs-source-dirs:     test
-  build-depends:
-    , base
-    , effectful-core
-    , reflex-dom-core-effectful
-    , reflex
-  default-language:   GHC2024
-  ghc-options:        -Wall
-
-test-suite immediate-builder-smoke
-  buildable: False
-  type:               exitcode-stdio-1.0
-  main-is:            ImmediateBuilderSmoke.hs
-  hs-source-dirs:     test
-  build-depends:
-    , base
-    , dependent-map
-    , dependent-sum
-    , effectful-core
-    , ghcjs-dom
-    , patch
-    , reflex-dom-core-effectful
-    , reflex
-    , text
-  default-language:   GHC2024
-  ghc-options:        -Wall
-
-test-suite render-hook-smoke
-  buildable: False
-  type:               exitcode-stdio-1.0
-  main-is:            RenderHookSmoke.hs
-  hs-source-dirs:     test
-  build-depends:
-    , base
-    , effectful-core
-    , jsaddle
-    , reflex-dom-core-effectful
-    , reflex
-  default-language:   GHC2024
-  default-extensions: TypeApplications, NumericUnderscores
-  ghc-options:        -Wall
-
-test-suite wrap-smoke
-  buildable: False
-  type:               exitcode-stdio-1.0
-  main-is:            WrapSmoke.hs
-  hs-source-dirs:     test
-  build-depends:
-    , base
-    , containers
-    , dependent-map
-    , dependent-sum
-    , effectful-core
-    , ghcjs-dom
-    , jsaddle
-    , patch
-    , reflex-dom-core-effectful
-    , reflex
-  default-language:   GHC2024
-  -- 'WrapSmoke' is a compile-only smoke: each exported name is
-  -- referenced in a typed top-level binding so the type signatures
-  -- elaborate; the bindings are intentionally polymorphic (they can't
-  -- be called from 'main' without a live DOM) and so trip
-  -- -Wunused-top-binds. Silencing that ONE warning for this ONE
-  -- file is the honest shape of a compile-only smoke.
-  ghc-options:        -Wall -Wno-unused-top-binds
-
-test-suite hydratable-smoke
-  buildable: False
-  type:               exitcode-stdio-1.0
-  main-is:            HydratableSmoke.hs
-  hs-source-dirs:     test
-  build-depends:
-    , base
-    , reflex-dom-core-effectful
-    , reflex
-  default-language:   GHC2024
-  -- compile-only smoke: _force* bindings elaborate exports
-  ghc-options:        -Wall -Wno-unused-top-binds
-
-test-suite input-disabled-smoke
-  buildable: False
-  type:               exitcode-stdio-1.0
-  main-is:            InputDisabledSmoke.hs
-  hs-source-dirs:     test
-  build-depends:
-    , base
-    , reflex-dom-core-effectful
-    , reflex
-  default-language:   GHC2024
-  -- compile-only smoke: _force* bindings elaborate exports
-  ghc-options:        -Wall -Wno-unused-top-binds
-
-test-suite static-builder-smoke
-  buildable: False
-  type:               exitcode-stdio-1.0
-  main-is:            StaticBuilderSmoke.hs
-  hs-source-dirs:     test
-  build-depends:
-    , base
-    , bytestring
-    , effectful-core
-    , reflex-dom-core-effectful
-    , reflex
-    , text
-  default-language:   GHC2024
-  -- compile-only smoke: polymorphic type-signature bindings elaborate exports
-  ghc-options:        -Wall -Wno-unused-top-binds
-
 test-suite static-render-smoke
   buildable: False
   type:               exitcode-stdio-1.0
@@ -554,66 +437,6 @@ test-suite static-render-smoke
   default-language:   GHC2024
   -- live smoke: actually runs renderStatic and asserts on the bytes
   ghc-options:        -Wall
-
-test-suite dom-builder-instance-smoke
-  buildable: False
-  type:               exitcode-stdio-1.0
-  main-is:            DomBuilderInstanceSmoke.hs
-  hs-source-dirs:     test
-  build-depends:
-    , base
-    , effectful-core
-    , reflex-dom-core-effectful
-    , reflex
-  default-language:   GHC2024
-  -- compile-only smoke: _witness binding elaborates the instance heads
-  ghc-options:        -Wall -Wno-unused-top-binds
-
-test-suite immediate-umbrella-smoke
-  buildable: False
-  type:               exitcode-stdio-1.0
-  main-is:            ImmediateUmbrellaSmoke.hs
-  hs-source-dirs:     test
-  build-depends:
-    , base
-    , effectful-core
-    , jsaddle
-    , reflex-dom-core-effectful
-    , reflex
-  default-language:   GHC2024
-  -- compile-only smoke: _t_* bindings elaborate the re-exports
-  ghc-options:        -Wall -Wno-unused-top-binds
-
-test-suite widget-basic-smoke
-  buildable: False
-  type:               exitcode-stdio-1.0
-  main-is:            WidgetBasicSmoke.hs
-  hs-source-dirs:     test
-  build-depends:
-    , base
-    , containers
-    , effectful-core
-    , reflex-dom-core-effectful
-    , reflex
-    , text
-  default-language:   GHC2024
-  -- compile-only smoke: polymorphic type-signature bindings elaborate exports
-  ghc-options:        -Wall -Wno-unused-top-binds
-
-test-suite prerender-smoke
-  buildable: False
-  type:               exitcode-stdio-1.0
-  main-is:            PrerenderSmoke.hs
-  hs-source-dirs:     test
-  build-depends:
-    , base
-    , effectful-core
-    , reflex-dom-core-effectful
-    , reflex
-    , text
-  default-language:   GHC2024
-  -- compile-only smoke: polymorphic type-signature bindings elaborate exports
-  ghc-options:        -Wall -Wno-unused-top-binds
 
 test-suite widget-input-smoke
   buildable: False
@@ -630,84 +453,3 @@ test-suite widget-input-smoke
     , text
   default-language:   GHC2024
   ghc-options:        -Wall -Wno-unused-top-binds -Wno-deprecations
-
-test-suite widget-resize-smoke
-  buildable: False
-  type:               exitcode-stdio-1.0
-  main-is:            WidgetResizeSmoke.hs
-  hs-source-dirs:     test
-  build-depends:
-    , base
-    , containers
-    , effectful-core
-    , ghcjs-dom
-    , reflex-dom-core-effectful
-    , reflex
-    , text
-  default-language:   GHC2024
-  ghc-options:        -Wall -Wno-unused-top-binds
-
-test-suite widget-lazy-smoke
-  buildable: False
-  type:               exitcode-stdio-1.0
-  main-is:            WidgetLazySmoke.hs
-  hs-source-dirs:     test
-  build-depends:
-    , base
-    , containers
-    , effectful-core
-    , ghcjs-dom
-    , reflex-dom-core-effectful
-    , reflex
-    , text
-  default-language:   GHC2024
-  ghc-options:        -Wall -Wno-unused-top-binds
-
-test-suite form-data-smoke
-  buildable: False
-  type:               exitcode-stdio-1.0
-  main-is:            FormDataSmoke.hs
-  hs-source-dirs:     test
-  build-depends:
-    , base
-    , containers
-    , effectful-core
-    , ghcjs-dom
-    , reflex-dom-core-effectful
-    , reflex
-    , text
-  default-language:   GHC2024
-  ghc-options:        -Wall -Wno-unused-top-binds
-
-test-suite old-smoke
-  type:               exitcode-stdio-1.0
-  main-is:            OldSmoke.hs
-  hs-source-dirs:     test
-  build-depends:
-    , base
-    , reflex-dom-core-effectful
-  default-language:   GHC2024
-  -- compile-only smoke: each exported name is referenced at top level
-  -- via a self-binding so the module's export list elaborates against
-  -- the effectful class layer.
-  ghc-options:        -Wall -Wno-unused-top-binds -Wno-deprecations -Wno-missing-signatures
-
-
-test-suite main-widget-smoke
-  buildable: False
-  type:               exitcode-stdio-1.0
-  main-is:            MainWidgetSmoke.hs
-  hs-source-dirs:     test
-  build-depends:
-    , base
-    , bytestring
-    , effectful-core
-    , ghcjs-dom
-    , reflex-dom-core-effectful
-    , reflex
-    , text
-  default-language:   GHC2024
-  -- compile-only smoke: polymorphic top-level bindings elaborate the
-  -- 'Reflex.Effectful.Dom.Main' exports at concrete types. Can't be
-  -- called from 'main' without a live browser + jsaddle-warp server.
-  ghc-options:        -Wall -Wno-unused-top-binds

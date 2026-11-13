@@ -5,8 +5,6 @@ build-type: Simple
 
 library
   hs-source-dirs: src
-  if arch(javascript) || arch(wasm32)
-    buildable: False
   build-depends: base
                , aeson
                , base64-bytestring

@@ -18,12 +18,14 @@ main = do
   html <- renderFrontendHtml (Map.singleton "frontend/test" "configured")
     [("session", "cookie-value")] ("/" <>) "initial" mtlFrontend (pure ()) (pure ())
   mapM_ (assertContains html)
-    [ "<title>MTL head</title>", "configured", "cookie-value"
+    [ "<title data-ssr=\"\">MTL head</title>", "<base data-ssr=\"\" href=\"/\" />", "configured", "cookie-value"
     , "/initial", "static branch"
     ]
   unless (not $ "client branch" `BS.isInfixOf` html) $ fail "SSR ran the client branch"
   effectHtml <- renderFrontendHtml Map.empty [] id "" effectFrontend (pure ()) (pure ())
   assertContains effectHtml "Effectful body"
+  assertContains effectHtml "<title data-ssr=\"\">Effectful head</title>"
+  assertContains effectHtml "<section data-ssr=\"\"><p data-ssr=\"\">Effectful body</p></section>"
   putStrLn "Frontend rendering checks passed (MTL and Effectful)."
 
 assertContains :: BS.ByteString -> BS.ByteString -> IO ()
@@ -43,4 +45,6 @@ mtlFrontend = FrontendMTL
     MTL.prerender_ (MTL.text "static branch") (MTL.text "client branch"))
 
 effectFrontend :: Frontend Text
-effectFrontend = Frontend (E.el "title" $ E.text "Effectful head") (E.text "Effectful body")
+effectFrontend = Frontend
+  (E.el "title" $ E.text "Effectful head")
+  (E.el "section" $ E.el "p" $ E.text "Effectful body")

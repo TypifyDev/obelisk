@@ -50,3 +50,17 @@ test-suite frontend-rendering
   build-depends: base, bytestring, containers, text,
                  jenga-frontend, jenga-route, jenga-executable-config-lookup,
                  reflex-dom-core, reflex-dom-core-effectful
+
+test-suite frontend-hydration-browser
+  type: exitcode-stdio-1.0
+  main-is: FrontendHydrationBrowser.hs
+  hs-source-dirs: test
+  default-language: GHC2024
+  ghc-options: -Wall -Werror -threaded
+  build-depends: base, bytestring, containers, directory,
+                 ghcjs-dom, http-types, jenga-executable-config-lookup,
+                 jenga-frontend, jenga-route, jsaddle, jsaddle-warp, process,
+                 reflex-dom-core, reflex-dom-core-effectful, temporary, text,
+                 wai, warp, websockets
+  if arch(javascript) || arch(wasm32)
+    buildable: False
